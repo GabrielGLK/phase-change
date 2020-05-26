@@ -19,8 +19,7 @@ The method to calcualte temperature gradient is different, we use similar method
 - the energy equation
     - ghost cell method
         - [reference](https://github.com/GabrielGLK/thesis-cases/blob/master/reference-papers/phase-change/mass-transfer-model/sharp-interface-model/Zhang%20%E5%92%8C%20Ni%20-%202018%20-%20Direct%20numerical%20simulations%20of%20incompressible%20mul.pdf)
-        - [code]
-        (https://github.com/GabrielGLK/phase-change/blob/master/phase-change/phase_change_models/sharp-interface-model/film-boiling/small_case.c#L170)
+        - [code](https://github.com/GabrielGLK/phase-change/blob/master/phase-change/phase_change_models/sharp-interface-model/film-boiling/small_case.c#L170)
     - [tracer.h](http://basilisk.fr/src/tracer.h) + [diffusion.h](http://basilisk.fr/src/diffusion.h)
 
 - Results

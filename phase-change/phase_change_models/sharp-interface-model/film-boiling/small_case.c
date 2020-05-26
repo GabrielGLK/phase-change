@@ -150,7 +150,18 @@ event vof(i++)
       alpha -= div_pc[]*dt/rho1*sqrt(sq(n.x)+sq(n.y)); // phase-change shifting distance 
       f[] = line_area(n.x,n.y,alpha); // cell volume fraction for n+1
     }*/
-  f[] -= dt*div_pc[]/rho1;
+  f[] -= dt*div_pc[]/rho1;// we can use both Malan PLIC method or just add volume fraction RHS of VOF equation, it's similar
+  /*
+  the difference between mass flux(\dot{m}) and volumetric source term (S_h):
+  S_h = \dot{m} |\nabla f| = \dot{m} \delta_s
+  the unit is (kg/(m^2 s)) and (kg/(m^3 s))
+
+  Therefore, we need to change the Malan expression to
+    alpha -= div_pc[]*dt/rho1;
+    not alpha -= div_pc[]*dt/(rho1*Delta);
+
+    note this!
+  */
   }
   boundary({f});
 }

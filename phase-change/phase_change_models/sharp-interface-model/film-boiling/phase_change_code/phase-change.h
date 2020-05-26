@@ -35,6 +35,11 @@ double interpolate_1 (Point point, scalar s, coord p)
   }
 }
 
+static inline double interp3 (Point point, coord p, scalar col) {
+  struct _interpolate _r = { col, x + p.x*Delta, y + p.y*Delta, z + p.z*Delta };
+  return interpolate_linear (point, _r);
+}
+
 // constant mass source scalar function
 void mass_source(scalar f, scalar m)
 {
@@ -189,24 +194,17 @@ void sharp_simple_model (scalar tr, scalar f, scalar temp,  face vector v_pc, do
   foreach_face()
     {
       dd[] = 1 - f[];
-      f_v.x[] = (dd[1] - dd[-1])/(2*1/(1<<level));
+      f_v.x[] = (dd[1] - dd[-1])/(2*Delta);
     }
   boundary((scalar *){f_v});
 
- /*
-  foreach_face()
-  {
-    v_pc.x[] = (tr[1] - tr[-1])/(2*Delta);
-  }
-  boundary((scalar *){v_pc}); */
   foreach()
     {
-      dd[] = 1 - f[];
       temp[] = 0;
       foreach_dimension()
         {
           if(f[]>1e-12&&f[]<1-1e-12)
-            temp[] += 2*1*v_pc.x[]*f_v.x[]/L_h;
+            temp[] += 2*v_pc.x[]*f_v.x[]/L_h;
           else
             temp[] += 0;
       }

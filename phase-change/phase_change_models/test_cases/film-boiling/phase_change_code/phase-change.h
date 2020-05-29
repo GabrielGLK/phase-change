@@ -78,11 +78,23 @@ void delta_magnini(scalar f, scalar del) {
   }
   boundary({del});
 }
-
-void smoother(scalar fr, scalar ff) {
-  foreach()  
-    ff[] = (fr[-1,1] + 2*fr[-1,0] + fr[-1,-1] + fr[1,1] + 2*fr[1,0] + fr[1,-1] + 2*fr[0,1] + 4*fr[0,0] + 2*fr[0,-1])/16;
-  boundary({fr,ff});
+// smear volume fraction with the vertex-average of *f*
+void smoother(scalar f, scalar ff) {
+  #if dimension <= 2
+  foreach()
+    ff[] = (4.*f[] + 
+	    2.*(f[0,1] + f[0,-1] + f[1,0] + f[-1,0]) +
+	    f[-1,-1] + f[1,-1] + f[1,1] + f[-1,1])/16.;
+#else // dimension == 3
+  foreach()
+    ff[] = (8.*f[] +
+	    4.*(f[-1] + f[1] + f[0,1] + f[0,-1] + f[0,0,1] + f[0,0,-1]) +
+	    2.*(f[-1,1] + f[-1,0,1] + f[-1,0,-1] + f[-1,-1] + 
+		f[0,1,1] + f[0,1,-1] + f[0,-1,1] + f[0,-1,-1] +
+		f[1,1] + f[1,0,1] + f[1,-1] + f[1,0,-1]) +
+	    f[1,-1,1] + f[-1,1,1] + f[-1,1,-1] + f[1,1,1] +
+	    f[1,1,-1] + f[-1,-1,-1] + f[1,-1,-1] + f[-1,-1,1])/64.;
+#endif
 }
 
 

@@ -252,7 +252,7 @@ void lee_model(scalar tr, scalar f, scalar m, double L_h){
         
     if(f[]>1e-12&&f[]<1-1e-12)
       { double T_p = interpolate_2 (point, tr, p);
-        r_i[] = 40*tr.tr_eq/(L_h*(0.5+0.5*f[])*Delta*f[]*rho1);//mass transfer intensity factor expression
+        r_i[] = tr.lambda*tr.tr_eq/(L_h*(0.5+0.5*f[])*Delta*f[]*rho1);//mass transfer intensity factor expression
         m[] = cm[]*r_i[]*f[]*rho1*(T_p - tr.tr_eq)/tr.tr_eq;
       }
   }
@@ -266,7 +266,7 @@ void tanasawa_model (scalar tr, scalar f, scalar m_dot,  double L_h)
     f[] = clamp(f[], 0., 1.);
   boundary({f});
   //double a = 0.2;// because we don't know the liquid molecular weight, so we give the guess of mass transfer intensity multipy liquid molecular weight
-  double b = 0.01;
+  double b = 0.01;// change this value for different phase-change problems
   foreach()
   {
     if(interfacial(point,f))
@@ -386,7 +386,7 @@ void zhang_model_2 (scalar tr, scalar f, scalar m, double L_h)
           double d1 = fabs(q.x*xc + q.y*yc - alpha_new*Delta - Delta*0.5*(q.x+q.y))/sqrt(sq(q.x) + sq(q.y));// distance for temperature gradient
           //double d1 = sqrt(sq(xk - xc) + sq(yk - yc));
           //double tt = interpolate_1 (point, tr, pp); // using interpolation scheme for temperpoint p
-          double tt = interp3(point,p,tr);
+          double tt = interpolate_2(point,tr,p);
           m[] = tr.lambda*(tt - tr.tr_eq)/(L_h*d1);// new method here
         }
     }
@@ -452,7 +452,7 @@ void Malan (scalar tr, scalar f, scalar m, double L_h)
           phi[2][0] = gamma[2][0]/(gamma[0][0] + gamma[1][0] + gamma[2][0]);
           mm[2][0] = phi[2][0]*(tt[2][0] - tr.tr_eq)/(Delta*d[2][0]);
 
-          //m[] = mm[0][0] + mm[1][0] + mm[2][0];
+          m[] = mm[0][0] + mm[1][0] + mm[2][0];//for stefan problem, if we want to check the direction of interface normal vector, we can make this term disappear
         }
         
       if(n.x<=0&&n.y<=0)
@@ -478,7 +478,7 @@ void Malan (scalar tr, scalar f, scalar m, double L_h)
           m[] = mm[0][1] + mm[1][1] + mm[2][1];
         }
         
-
+      
       if(n.x>=0&&n.y>=0)
         {
           d[0][2] = fabs(-alpha + r[0].x*n.x + r[0].y*n.y)/sqrt(sq(n.x) + sq(n.y));

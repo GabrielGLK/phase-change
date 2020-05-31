@@ -1,104 +1,110 @@
 /**
-# Time-implicit discretisation of reaction--diffusion equations
+## A diffusion-equation solver
 
-We want to discretise implicitly the reaction--diffusion equation
-$$
-\theta\partial_tf = \nabla\cdot(D\nabla f) + \beta f + r
-$$ 
-where $\beta f + r$ is a reactive term,  $D$ is the diffusion
-coefficient and $\theta$ can be a density term.
+For a species-field concentration $c$, the diffusion equations reads
+(or a version thereof),
 
-Using a time-implicit backward Euler discretisation, this can be
-written
-$$
-\theta\frac{f^{n+1} - f^{n}}{dt} = \nabla\cdot(D\nabla f^{n+1}) + \beta
-f^{n+1} + r
-$$
-Rearranging the terms we get
-$$
-\nabla\cdot(D\nabla f^{n+1}) + (\beta - \frac{\theta}{dt}) f^{n+1} =
-- \frac{\theta}{dt}f^{n} - r
-$$
-This is a Poisson--Helmholtz problem which can be solved with a
-multigrid solver. */
+$$\frac{\partial c}{\partial t} = \nabla \cdot \left( \kappa \nabla c
+\right).$$
 
-#include "poisson-pc.h"
+With $\kappa$ the diffusivity of the medium. Because of reasons, we
+wish to use a finite-volume discretization to solve for the temporal
+evolution of $c(\mathbf{x},t)$. We recognize the flux vector ($\mathbf{F}$):
+
+$$\frac{\partial c}{\partial t} + \nabla \cdot \mathbf{F} = 0,$$
+
+as,
+
+$$\mathbf{F} = -\kappa \nabla c.$$
+
+Given the alligment of the faces, we can make a function that writes
+the fluxes ($F$) of $c$ in a face vector field. We also request its
+user to provide the diffusivity on faces, which could be `const`ant:
+*/
+
+void flux_diffusion (scalar c, (const) face vector kappa, face vector F) {
+  /**
+ Neighboring cells are possibly behind a boundary of some
+     sort. As such, we need to compute the relevant solution values. 
+*/
+  boundary ({c});
+  /**
+By convention, a face separates a cell from its left, bottom, front
+neighbor in the `x,y` and `z` direction, respectively. The
+`foreach_face()` function will automatically rotate over all
+dimensions.
+   */
+  foreach_face()
+    F.x[] = -kappa.x[]*(c[] - c[-1])/Delta; //2nd order accurate gradient *estimation*
+}
 
 /**
-The parameters of the `diffusion()` function are a scalar field `f`,
-scalar fields `r` and $\beta$ defining the reactive term, the timestep
-`dt` and a face vector field containing the diffusion coefficient
-`D`. If `D` or $\theta$ are omitted they are set to one. If $\beta$ is
-omitted it is set to zero. Both `D` and $\beta$ may be constant
-fields.
+   Using this function we can easily compute the tendency for $c$ in a
+   cell ($j$) with $N$ faces:
 
-Note that the `r`, $\beta$ and $\theta$ fields will be modified by the solver.
+$$   \left(\frac{\partial c}{\partial t}\right)_j = \frac{1}{V_j} \sum_{i=1}^N \mathbf{F_i}
+   \cdot \mathbf{A_i}.$$
 
-The function returns the statistics of the Poisson solver. */
+Assuming that the ratio $\frac{V_j}{A_i}=\Delta$. Which is true for
+one-dimensional, square or cubic cells.
+*/
 
-struct Diffusion {
-  // mandatory
-  scalar f;
-  double dt;
-  // optional
-  face vector D;  // default 1
-  scalar r, beta; // default 0
-  scalar theta;   // default 1
-};
-
-trace
-mgstats diffusion (struct Diffusion p)
-{
-
-  /**
-  If *dt* is zero we don't do anything. */
-
-  if (p.dt == 0.) {
-    mgstats s = {0};
-    return s;
+void tendency_from_flux (face vector F, scalar dc) {
+  boundary_flux ({F});  //flux on levels
+  foreach() {
+    dc[] = 0;
+    foreach_dimension() //Rotates over the dimensions
+      dc[] +=  (F.x[] - F.x[1])/Delta; 
   }
-
-  /**
-  We define $f$ and $r$ for convenience. */
-
-  scalar f = p.f, r = automatic (p.r);
-
-  /**
-  We define a (possibly constant) field equal to $\theta/dt$. */
-
-  const scalar idt[] = - 1./p.dt;
-  (const) scalar theta_idt = p.theta.i ? p.theta : idt;
-  
-  if (p.theta.i) {
-    scalar theta_idt = p.theta;
-    foreach()
-      theta_idt[] *= idt[];
-  }
-
-  /**
-  We use `r` to store the r.h.s. of the Poisson--Helmholtz solver. */
-
-  if (p.r.i)
-    foreach()
-      r[] = theta_idt[]*f[] - r[];
-  else // r was not passed by the user
-    foreach()
-      r[] = theta_idt[]*f[];
-
-  /**
-  If $\beta$ is provided, we use it to store the diagonal term $\lambda$. */
-
-  scalar lambda = theta_idt;
-  if (p.beta.i) {
-    scalar beta = p.beta;
-    foreach()
-      beta[] += theta_idt[];
-    lambda = beta;
-  }
-  boundary ({lambda});
-
-  /**
-  Finally we solve the system. */
-
-  return poisson (f, r, p.D, lambda, tolerance = 1e-6);
 }
+
+/**
+   With the tendency, the solution can be advanced in time with
+   timestep `dt`.
+*/
+
+void advance (scalar c, scalar dc, double dt, scalar r) {
+  foreach()
+    c[] += dt*(dc[] + r[]);
+}
+
+/**
+Now we can construct a user-interface function, `diffusion()` that
+employs a fordward-Euler scheme.
+ */
+
+void diffusion_1 (scalar c, double dt, face vector kappa, scalar r) {
+  face vector F[];
+  scalar dc[];
+  flux_diffusion (c, kappa, F);
+  tendency_from_flux (F, dc);
+  advance (c, dc, dt,r);
+}
+/**
+   At the cost of more computational effort and memory, we could also
+   choose to use the mid-point rule to update the solution. It is
+   second-order accurate in time!
+ */
+
+void diffusion_midpoint (scalar c, double dt, face vector kappa, scalar r) {
+  face vector F[];
+  scalar dc[], c_temp[];
+  foreach()
+    c_temp[] = c[];                 //create a scratch
+  flux_diffusion(c_temp, kappa, F); 
+  tendency_from_flux (F, dc);
+  advance (c_temp, dc, dt/2.,r);     //advance to the mid point.
+  flux_diffusion(c_temp, kappa, F); //Re-estimate the fluxes at the mid point,
+  tendency_from_flux (F, dc);       //and the tendency there.
+  advance (c, dc, dt,r);             //update the solution
+}
+
+/**
+# Further, 
+
+We could use the [`Runke-Kutta`](/src/runge-kutta.h) schemes (upto 4th
+order) or a [predictor corrector](/src/predictor-corrector.h) scheme.
+ */
+
+
+

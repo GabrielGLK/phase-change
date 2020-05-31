@@ -1,9 +1,11 @@
 #define ADAPT 0
+//#define FILTERED// for largen density and viscosity ratios
 #include "phase_change_code/centered-pc.h" // change the projection step
+//#include "phase_change_code/double-projection-pc.h"
 #include "phase_change_code/two-phase-pc.h"
 #include "phase_change_code/phase-change.h"
 #include "tension.h"
-#include "navier-stokes/conserving.h" // This file implements momentum-conserving VOF advection of the velocity components for the two-phase Navier-Stokes solver.
+#include "phase_change_code/conserving-pc.h" // This file implements momentum-conserving VOF advection of the velocity components for the two-phase Navier-Stokes solver.
 #include "navier-stokes/perfs.h" // record velocity/pressure statistic 
 #include "view.h"
 
@@ -35,25 +37,28 @@ face vector u_l[];    // liquid face velocity
 face vector uf_new[];
 scalar div_1[];       // one-fluid velocity divergence
 scalar div_2[];       // liquid velocity divergence
-vector ul[];     // liquid velocity divergence
+vector ul[];     // 
 
 /*********************************** temperature tracers **************************************/
 scalar T[], *tracers = {T}; // vapor and liquid temp and use tracer.h to advect them
 
 /************************************ boundary conditions **************************************/
-// outflow boundary conditions on heated wall
+// outflow boundary conditions on liquid side wall
+T[right] = dirichlet(T_sat);
 p[right] = dirichlet(0);
 pf[right] = dirichlet(0.);
 u.n[right] = neumann(0.);
-p_new[right] = dirichlet(0.);
-ul.n[right] = dirichlet(0.);
-
+// stationary wall boundary condition on left superheated wall
 T[left] = dirichlet(T_wall);
-pf[left] = dirichlet(0);
+p[left] = dirichlet(0.);
+pf[left] = dirichlet(0.);
 p_new[left] = dirichlet(0.);
-u.n[left] = dirichlet(0.);
-ul.n[left] = neumann(0.);
+u.t[left] = dirichlet(0.);
+ul.n[left] = dirichlet(0.);
 
+u_l.n[left] = 0;
+u_l.n[bottom] = 0;
+u_l.n[top] = 0;
 int main() {
   size (L0); // square domain 1m each side
   init_grid(1<<level); 
@@ -62,7 +67,7 @@ int main() {
   mu1 = 2.82e-4;
   mu2 = 1.23e-5;
   f.sigma = 0.059;
-  TOLERANCE = 1e-3;
+  TOLERANCE = 1e-4;
   #if REDUCED
     G.x = 0;
   #endif
@@ -85,15 +90,14 @@ event init (t = 0) {
 
 /************************ define mass source *******************************/
 scalar velocity[];     // velocity magnitude
-scalar m_dot[];
-scalar div_pc[];
-face vector evp[];
-event stability(i++)   // executed before vof and ns events
+scalar m_dot[], div_pc[]; // mass flux and volumetric mass source term
+event mass_flux(i++)   
 {
   scalar delta_s[];
   delta_magnini(f,delta_s);
   foreach()
     {
+      f[] = clamp(f[],0,1);
       T.tr_eq = T_sat;
       T.rho = rho1*f[]+rho2*(1-f[]);
       T.cp = cp_1*f[]+cp_2*(1-f[]);
@@ -101,10 +105,10 @@ event stability(i++)   // executed before vof and ns events
     }
   /* if you calculate mass flux, we can use several mass transfer models, just change the function names, I have
   already make the parameters in the function same. */
-  lee_model(T,f,m_dot,L_h); 
+  Malan(T,f,m_dot,L_h); 
   /* when calculating the divergenc of velocity, we have three methods:
   1. using mass diffusion method, this method is for the interface instable case, for example: large density ratios
-  2. just multiply the delta_s function with the mass flux, the predition is delta_s function can be computed
+  2. just multiply the delta_s function with the mass flux, the precondition is delta_s function can be computed
   3. calculte the divergence after we get the new vof value.
   */
   foreach()
@@ -117,11 +121,8 @@ event stability(i++)   // executed before vof and ns events
   boundary({velocity});
 }
 
-
-
 event vof(i++)
 {
-  //double dt_1 = 1/(D_L*4/sq(L0/(1<<level)));
 /******************* step-2: shift interface accounting for phase-change *******************/  
   foreach()
   {
@@ -134,52 +135,47 @@ event vof(i++)
       double alpha = plane_alpha(f[],n); // distance from original point to interface 
       alpha -= m_dot[]*dt/(Delta*rho1)*sqrt(sq(n.x)+sq(n.y)); // phase-change shifting distance 
       f[] = line_area(n.x,n.y,alpha); // cell volume fraction for n+1
-      //div[] = (f_old - f[])/dt*(rho1/rho1 - 1); // this is the third method to calculate divergence of velocity
+      //div[] = (f_old - f[])/dt*(rho1/rho1 - 1); // for volumetric mass source
     }
   }
-  boundary({f,T});
+  boundary({f});
 }
-
-scalar dd[];
 event tracer_diffusion(i++){
-  double T_p;
   T.tr_eq = T_sat;
   foreach()
     { 
-      dd[] = 1 - f[];// volume fraction of vapor
-      coord n  = interface_normal( point, dd) , p, q; 
-      q.x = -n.x, q.y = -n.y;
-      double alpha  = plane_alpha (dd[], q);
-      line_center (q, alpha,dd[],&p);
-      if(interfacial(point,f))
-        T_p = interpolate_2 (point, T, p);// we calculate the temperature in the barycenter of vapor portion in interfacial cells
-      if(interfacial(neighborp(-1,-1),f)&&f[]==1)
-        T[] = 2*T.tr_eq - T_p;
       T[] = clamp(T[],T.tr_eq,T_wall);
       T.D = D_V*f[] + D_L*(1-f[]);
       T.rho = rho1*f[]+rho2*(1-f[]);
       T.cp = cp_1*f[]+cp_2*(1-f[]);
       T.lambda = lambda_1*f[]+lambda_2*(1-f[]);
     }
-    heat_source (T, f, div_pc, L_h);// add heat source term in diffusion equation
+  heat_source (T, f, m_dot, L_h);// add heat source term in diffusion equation
+  //dirichlet_diffusion(T,f,level,dt,10);
 }
 
 /* first approximation projection method after prediction of face velocity to compute advection velocity, 
 this step also considers mass source due to projection step
 */
+/*
 event advection_term (i++,last)
 {
   if (!stokes) {
     mgpf = project_pc (uf, pf, alpha, dt/2., mgpf.nrelax,div_pc,rhoo);
+    //// mgpf = project_liquid(uf, pf, alpha, dt/2., mgpf.nrelax,div_pc); // for volumetric mass source
   }
 }
-
+*/
 
 event projection(i++){
-  
+/*
+we add the volumetric mass source in poisson equation projection step after solving intermediate fluid velocity.
+This is for solving the fluid velocity and pressure with phase change.It is similar to the methodology without phase change.
+*/
   project_pc(uf,p,alpha,dt,4,div_pc,rhoo); // projection step for entire domain
-  centered_gradient (p, g);
-  correction (dt);
+  //project_liquid(uf,p,alpha,dt,4,div_pc); // for volumetric mass source
+  centered_gradient (p, g);// calculate centered acceleration
+  correction (dt); // correct face velocity on centered one
 
   // copy velocity to u_l
   foreach_face()
@@ -194,12 +190,11 @@ event projection(i++){
   }
   boundary({div_1}); 
   
-  // solve pressure equation with phase change velocity divergence
+/******************* step-1: construct entire divergence-free domain *******************/  
   scalar divv[];
   foreach(){
-    divv[] = div_pc[]*rhoo;
-    foreach_dimension()
-      divv[] += 0;
+    divv[] = div_pc[]*rhoo;// !!!!!!!!!!!!! problem here, the phase change velocity too large
+    //divv[] = div_pc[]; // for volumetric mass source
     divv[] /= dt;
   }
   poisson (p_new, divv, alpha, tolerance = TOLERANCE/sq(dt), nrelax = 4);
@@ -208,8 +203,8 @@ event projection(i++){
   foreach_face()
     {
       uf_new.x[] = -dt*alpha.x[]*face_gradient_x (p_new, 0);
-      u_l.x[] += uf_new.x[];
-      ul.x[] = (uf_new.x[] + uf_new.x[1])/(fm.x[] + fm.x[1] + SEPS);
+      u_l.x[] = uf.x[] + uf_new.x[];
+      ul.x[] = (u_l.x[] + u_l.x[1])/(fm.x[] + fm.x[1] + SEPS);
     }
   boundary ((scalar *){u_l, uf_new, ul});
   // compute again velocity divergence of u_l (should be zero)
@@ -227,7 +222,6 @@ event adapt (i++) {
 }
 #endif
 
-
 void mg_print (mgstats mg)
 {
   if (mg.i > 0 && mg.resa > 0.)
@@ -236,20 +230,19 @@ void mg_print (mgstats mg)
 	    mg.nrelax);
 }
 
-
-event logfile (t = 0; t <= 0.1; t += 0.01) {
+event logfile (t = 0; t <= 10; t += 0.01) {
 
   double xb = 0., vx = 0.,vy = 0., sb = 0.,yb = 0., nu = 0.;
   foreach(reduction(+:xb) reduction(+:vx) reduction(+:sb) reduction(+:yb) reduction(+:vy) reduction(+:nu)) {
     double dv = (1. - f[])*dv();
-    xb += x*dv;
+    xb += x*dv;//interface position
     yb += y*dv;
     vx += u.x[]*dv;
     vy += u.y[]*dv;
     sb += dv; 
   }
   printf (" %g %g %g %g %g %g %g %g %g %g ", 
-	  t, sb, -1.,  xb/sb, yb/sb,vx/sb, vy/sb,dt, perf.t, perf.speed);
+	  t, sb, -1.,  2*xb/sb, yb/sb,vx/sb, vy/sb,dt, perf.t, perf.speed);
   mg_print (mgp);
   mg_print (mgpf);
   mg_print (mgu);
@@ -265,8 +258,7 @@ event snap (t=0;t += 0.01)
    output_gfs (file = name);
  }
 
-
-event movies (t = 0; t <= 0.1; t += 0.01) {
+event movies (t = 0; t <= 10; t += 0.01) {
   
   foreach()
     f[] = clamp(f[], 0., 1.);

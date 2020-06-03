@@ -523,7 +523,6 @@ struct Project_pc {
   int nrelax;        // optional: default four
   scalar m;
   double rhoo;
-  scalar delta;
 };
 
 
@@ -574,9 +573,9 @@ mgstats project_pc (struct Project_pc q)
 mgstats project_liquid (struct Project_pc q)
 {
   face vector uf = q.uf;
-  scalar p = q.p, m = q.m, delta = q.delta;
+  scalar p = q.p, m = q.m;
   (const) face vector alpha = q.alpha.x.i ? q.alpha : unityf;
-  double dt = q.dt ? q.dt : 1, rhoo = q.rhoo;
+  double dt = q.dt ? q.dt : 1;
   int nrelax = q.nrelax ? q.nrelax : 4;
   
   /**
@@ -586,7 +585,7 @@ mgstats project_liquid (struct Project_pc q)
 
   scalar div[];
   foreach(){
-    div[] = -m[]*rhoo*delta[];
+    div[] = -m[];
     foreach_dimension()
       div[] += (uf.x[1] - uf.x[])/Delta;
     div[] /= dt;

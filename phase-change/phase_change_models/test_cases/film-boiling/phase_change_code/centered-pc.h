@@ -1,18 +1,41 @@
 /**
 # Incompressible Navier--Stokes solver (centered formulation)
+The developed module is based on the Immersed Boundary Method (IBM), namely **Brinkman Penalization Method** (BPM) [Liu & Vasilyev 2007](http://www.skoltech.ru/app/data/uploads/sites/19/2017/02/JCP_2007.pdf).
+Briefly, the idea is next: let us consider a viscous incompressible flow around a bunch of porous obstacles $O_i$. Usually the boundary condition on the surface is no-slip, therefore, the velocity of the flow on the surface is equal to the velocity of the solid $\mathbf{U}_t$.
 
-We wish to approximate numerically the incompressible,
-variable-density Navier--Stokes equations
 $$
-\partial_t\mathbf{u}+\nabla\cdot(\mathbf{u}\otimes\mathbf{u}) = 
-\frac{1}{\rho}\left[-\nabla p + \nabla\cdot(2\mu\mathbf{D})\right] + 
-\mathbf{a}
+\partial_t\mathbf{u}+\nabla\cdot(\mathbf{u}\otimes\mathbf{u}) =
+\frac{1}{\rho}\left[-\nabla p + \nabla\cdot(2\mu\mathbf{D})\right] +
+\overbrace{\mathbf{a}}^{\text{volume force}} - \overbrace{\frac{f_s}{\eta_s}\left(\mathbf{u}-\mathbf{U}_t\right)}^{\text{penalization term}}
 $$
 $$
 \nabla\cdot\mathbf{u} = 0
 $$
-with the deformation tensor 
-$\mathbf{D}=[\nabla\mathbf{u} + (\nabla\mathbf{u})^T]/2$.
+with the deformation tensor
+$\mathbf{D}=[\nabla\mathbf{u} + (\nabla\mathbf{u})^T]/2$, $\eta_s$ is a penalization coefficient, characterizes ability of solids to permeate. The less $\eta_s$, the more precise.
+
+In order to distinguish solids from fluids we will use mask array $f_s$:
+$$
+f_s (\mathbf{x})=
+\begin{cases}
+1, \text{in solids}\\
+0, \text{out of solids}\\
+\end{cases}
+$$
+
+Let's consider the last term in detail. If a cell is not in an obstacle, then this term is equal to 0, but if a cell belongs to solids, then the term  $-\frac{f_s}{\eta_s}\left(\mathbf{u}-\mathbf{U}_t\right)$ is dominant (we need to guarantee it choosing appropriate penalization coefficient $\eta_s$)
+$$
+|RHS|\ll\frac{|\mathbf{u}-\mathbf{U}_t|}{\eta_s}
+$$
+
+In this case the system of Navier--Stokes equations is reduced to 
+$$
+\partial_t\mathbf{u} = -\frac{\mathbf{u}-\mathbf{U}_t}{\eta_s}
+$$
+which has next analytical solution of exponential convergence of velocity $\mathbf{u}$ to preset value $\mathbf{U}_t$ with characteristic time $\eta_s$.
+$$
+\mathbf{u} = \mathbf{U}_t + \left(\mathbf{u}_0-\mathbf{U}_t \right)\exp\left( -t/\eta_s\right)
+$$
 
 The scheme implemented here is close to that used in Gerris ([Popinet,
 2003](/src/references.bib#popinet2003), [Popinet,
@@ -21,16 +44,42 @@ The scheme implemented here is close to that used in Gerris ([Popinet,
 
 We will use the generic time loop, a CFL-limited timestep, the
 Bell-Collela-Glaz advection scheme and the implicit viscosity
-solver. If embedded boundaries are used, a different scheme is used
-for viscosity. */
+solver.
+There are 4 ways of solid treatment: 
+
+(i) mask (no MPI, multiphase flow)
+
+(ii) embedded boundaries method (EBM) (with MPI, one phase flow, very accurate)
+
+(iii) Popinet's trick (with MPI, multiphase flow, inaccurate)
+
+(iv) Brinkman Penalization method (BPM) (with MPI, multiphase flow, accurate, moving solids)
+
+More detailed information in [compatability table](http://basilisk.fr/src/COMPATIBILITY). As you can see Brinkman Penalisation method is appropriate for multiphase flows.
+
+In the Brinkman Penalization method the penalization term is handled implicitly together with the viscous term. Fortunately, this linear term lead to diagonally dominant "matrix", which will converges quickly.
+Detailed information about verification you can find [here](http://basilisk.fr/sandbox/weugene/cylinder_penalization.c).
+
+To activate Brinkman Penalization Method it is necessary to%
+
+1) define BRINKMAN_PENALIZATION
+
+2) need to set solid mask field: scalar fs[] and velocity of solid vector Us[]
+
+3) Note that penalization coefficient $\eta_s$ default value is 1e-15
+ */
 
 #include "run.h"
 #include "timestep.h"
 #include "bcg.h"
 #if EMBED
-# include "viscosity-embed-pc.h"
+#include "viscosity-embed-pc.h"
 #else
-# include "viscosity-pc.h"
+#ifndef BRINKMAN_PENALIZATION
+#include "viscosity-pc.h"
+#else
+#include "viscosity-weugene.h"
+#endif
 #endif
 
 /**
@@ -41,7 +90,7 @@ $\mathbf{g}$ will contain pressure gradients and acceleration terms.
 We will also need an auxilliary face velocity field $\mathbf{u}_f$ and
 the associated centered pressure field $p_f$. */
 
-scalar p[];
+scalar p[],p_new[];
 vector u[], g[];
 scalar pf[];
 face vector uf[];
@@ -67,7 +116,7 @@ $\nabla\cdot(\mathbf{u}\otimes\mathbf{u})$ is omitted. This is a
 reference to [Stokes flows](http://en.wikipedia.org/wiki/Stokes_flow)
 for which inertia is negligible compared to viscosity. */
 
-(const) face vector mu = zerof, a = zerof, alpha = unityf;
+(const) face vector mu = zerof, a = zerof, alpha = unityf, kappa = zerof;
 (const) scalar rho = unity;
 mgstats mgp, mgpf, mgu;
 bool stokes = false;
@@ -90,6 +139,7 @@ and staggering of $\mathbf{a}$, this can be written */
 
 p[right] = neumann (neumann_pressure(ghost));
 p[left]  = neumann (- neumann_pressure(0));
+
 #if AXI
 uf.n[bottom] = 0.;
 uf.t[bottom] = dirichlet(0); // since uf is multiplied by the metric which
@@ -131,6 +181,7 @@ event defaults (i = 0)
   The pressures are never dumped. */
 
   p.nodump = pf.nodump = true;
+  
   /**
   The default density field is set to unity (times the metric). */
 
@@ -215,19 +266,20 @@ If we are using VOF or diffuse tracers, we need to advance them (to
 time $t+\Delta t/2$) here. Note that this assumes that tracer fields
 are defined at time $t-\Delta t/2$ i.e. are lagging the
 velocity/pressure fields by half a timestep. */
-
+event mass_flux (i++,last);
 event vof (i++,last);
 event tracer_advection (i++,last);
 event tracer_diffusion (i++,last);
-
 /**
 The fluid properties such as specific volume (fields $\alpha$ and
 $\alpha_c$) or dynamic viscosity (face field $\mu_f$) -- at time
 $t+\Delta t/2$ -- can be defined by overloading this event. */
 
 event properties (i++,last) {
-  boundary ({alpha, mu, rho});
+  boundary ({alpha, mu, rho, kappa}); // Weugene: kappa added
 }
+
+event tracer_diffusion (i++,last);
 
 /**
 ### Predicted face velocity field
@@ -306,7 +358,7 @@ event advection_term (i++,last)
 {
   if (!stokes) {
     prediction();
-    //mgpf = project (uf, pf, alpha, dt/2., mgpf.nrelax);
+    mgpf = project (uf, pf, alpha, dt/2., mgpf.nrelax);
     advection ((scalar *){u}, uf, dt, (scalar *){g});
   }
 }
@@ -330,7 +382,7 @@ The viscous term is computed implicitly. We first add the pressure
 gradient and acceleration terms, as computed at time $t$, then call
 the implicit viscosity solver. We then remove the acceleration and
 pressure gradient terms as they will be replaced by their values at
-time $t+\Delta t$. */
+time $t+\Delta t$. Note that if BRINKMAN_PENALIZATION variable is defined then the penalization term is implemented into the **new viscosity function**.*/
 
 event viscous_term (i++,last)
 {
@@ -413,11 +465,22 @@ next timestep). Then compute the centered gradient field *g*. */
 
 event projection (i++,last);
 /**
+  The projection operation can spoil the boundary conditions on velocity, therefore it is necessary to correct it each time step.*/
+#if BRINKMAN_PENALIZATION
+event brinkman_penalization(i++, last){
+    brinkman_correction(u, uf, rho, dt);
+}
+#endif
+/**
 Some derived solvers need to hook themselves at the end of the
 timestep. */
 
 event end_timestep (i++, last);
 
+
+/**
+Output vtk files*/
+event vtk_file (i++, last);// Added by Weugene
 /**
 ## Adaptivity
 
@@ -437,6 +500,122 @@ event adapt (i++,last) {
   event ("properties");
 }
 #endif
+
+/**
+## Useful utilities
+These methods can be moved to utility.h...
+
+void MinMaxValues calculates threshold $\epsilon$ based on min and max value. This utility can be helpful with  adapt_wavelet function. If EPS_MAXA=1, then $\epsilon_A=\epsilon_{A0} \max A$, otherwise $\epsilon_A=\epsilon_{A0} \frac{\min A +\max A}{2}$.
+*/
+
+void MinMaxValues(scalar * list, double * arr_eps) {// for each scalar min and max
+  double arr[10][2];
+  int ilist = 0;
+  for (scalar s in list) {
+    double mina= HUGE, maxa= -HUGE;
+    foreach( reduction(min:mina) reduction(max:maxa) ){
+      if (fabs(s[]) < mina) mina = fabs(s[]);
+      if (fabs(s[]) > maxa) maxa = fabs(s[]);
+    }
+    arr[ilist][0] = mina;
+    arr[ilist][1] = maxa;
+    ilist++;
+//        fprintf(stderr, "arr for i=%d", ilist);
+  }
+
+  for (int i = 0; i < ilist; i++){
+#if EPS_MAXA == 1
+    arr_eps[i] *=arr[i][1];
+#else
+    arr_eps[i] *= 0.5*(arr[i][0] + arr[i][1]);
+#endif
+#ifdef DEBUG_MINMAXVALUES
+    fprintf(stderr, "MinMaxValues: i=%d, min=%g, max=%g, eps=%g\n", i, arr[i][0], arr[i][1], arr_eps[i]);
+#endif
+  }
+}
+
+/**
+## Useful utilities for Brinkman penalization method
+Redefined functions which neglect values in solids (if fs[] =1).
+*/
+
+stats statsf_weugene (scalar f, scalar fs)
+{
+    double dvr, min = 1e100, max = -1e100, sum = 0., sum2 = 0., volume = 0.;
+    foreach(reduction(+:sum) reduction(+:sum2) reduction(+:volume)
+    reduction(max:max) reduction(min:min))
+    if (fs[] < 1. && f[] != nodata) {
+        dvr = dv()*(1. - fs[]);
+        volume += dvr;
+        sum    += dvr*f[];
+        sum2   += dvr*sq(f[]);
+        if (f[] > max) max = f[];
+        if (f[] < min) min = f[];
+    }
+    stats s;
+    s.min = min, s.max = max, s.sum = sum, s.volume = volume;
+    if (volume > 0.)
+        sum2 -= sum*sum/volume;
+    s.stddev = sum2 > 0. ? sqrt(sum2/volume) : 0.;
+    return s;
+}
+
+stats statsf_weugene2 (scalar f, scalar fs)
+{
+    double dvr, min = 1e100, max = -1e100, sum = 0., sum2 = 0., volume = 0.;
+    foreach(reduction(+:sum) reduction(+:sum2) reduction(+:volume)
+    reduction(max:max) reduction(min:min))
+    if (fs[] == 0. && f[] != nodata) {
+        dvr = dv()*(1. - fs[]);
+        volume += dvr;
+        sum    += dvr*f[];
+        sum2   += dvr*sq(f[]);
+        if (f[] > max) max = f[];
+        if (f[] < min) min = f[];
+    }
+    stats s;
+    s.min = min, s.max = max, s.sum = sum, s.volume = volume;
+    if (volume > 0.)
+        sum2 -= sum*sum/volume;
+    s.stddev = sum2 > 0. ? sqrt(sum2/volume) : 0.;
+    return s;
+}
+
+norm normf_weugene (scalar f, scalar fs)
+{
+  double dvr, avg = 0., rms = 0., max = 0., volume = 0.;
+  foreach(reduction(max:max) reduction(+:avg)
+  reduction(+:rms) reduction(+:volume))
+  if (fs[] < 1. && f[] != nodata) {
+    dvr = dv()*(1. - fs[]);
+    double v = fabs(f[]);
+    if (v > max) max = v;
+    volume += dvr;
+    avg    += dvr*v;
+    rms    += dvr*sq(v);
+  }
+  norm n;
+  n.avg = volume ? avg/volume : 0.;
+  n.rms = volume ? sqrt(rms/volume) : 0.;
+  n.max = max;
+  n.volume = volume;
+  return n;
+}
+
+double change_weugene (scalar s, scalar sn, scalar fs)
+{
+  double max = 0.;
+  foreach(reduction(max:max)) {
+    if (fs[] < 1) {
+      double ds = fabs (s[] - sn[]);
+      if (ds > max)
+        max = ds;
+    }
+    sn[] = s[];
+  }
+  return max;
+}
 
 /**
 ## See also

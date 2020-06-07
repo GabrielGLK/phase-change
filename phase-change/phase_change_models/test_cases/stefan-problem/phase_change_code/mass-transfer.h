@@ -14,7 +14,6 @@ attribute {
   double rho_cp;
 }
 
-/*************************************** ghost cell method ***********************************************/
 /*
  interpolation method to set neighboring cell of unsaturated fluid of interface to be saturated temperature
 First interpolation method
@@ -107,24 +106,19 @@ void smoother(scalar f, scalar ff) {
 */
 struct Mass_Diffusion{
   scalar tr;
-  scalar f;
   scalar m;
 };
 
 mgstats mass_diffusion (struct Mass_Diffusion p){
 
-  scalar m = p.m, tr = p.tr, f = p.f;
+  scalar m = p.m, tr = p.tr;
   scalar mass_source[], b[], c[];
   face vector mass_diffusion_coef[];
-
- foreach()
-    f[] = clamp(f[], 0., 1.);
-  boundary ({f, tr,m});
 
 foreach() 
   {
     mass_source[] = m[];
-    b[] = -1;
+    b[] = 0;
     c[] = 0;
   }
 boundary({mass_source, b , c});
@@ -134,6 +128,27 @@ foreach_face()
 boundary((scalar *){mass_diffusion_coef});
 
 return diffusion (tr, dt, D = mass_diffusion_coef, r = mass_source, beta = b, theta = c);
+}
+
+mgstats mass_poisson (struct Mass_Diffusion p){
+
+  scalar m = p.m, tr = p.tr;
+  face vector mass_diffusion_coef[];
+  scalar mm[],b[],c[];
+ foreach()
+    {
+      mm[] = m[];
+      c[] = 0;
+    }
+  boundary ({tr,mm,b, c});
+
+foreach_face()
+  mass_diffusion_coef.x[] = fm.x[]*sq(2*Delta);// control the mass diffusion amplitude
+boundary((scalar *){mass_diffusion_coef});
+
+//return poisson(tr,mm,mass_diffusion_coef,lambda = b, tolerance = 1e-3, nrelax = 2);
+return poisson (a = tr, b = mm, alpha = mass_diffusion_coef, lambda = c);
+//return diffusion (tr, dt, D = mass_diffusion_coef, r = mm, theta = c);
 }
 
 /* if we want to use adaptive mesh refinement, the better way is to construct one scalar covering volume fraction.
@@ -240,7 +255,71 @@ void sharp_simple_model (scalar tr, scalar f, scalar temp, double L_h)
     {
       temp[] = 0;
       foreach_dimension()
-        temp[] += cm[]*2*0.025*v_pc.x[]*n.x[]/L_h; // unsaturated thermo-conductivity, film-boiling is 1
+        temp[] += cm[]*2*0.025*v_pc.x[]*n.x[]/(sqrt(sq(n.x[]) + sq(n.y[]))*L_h); // unsaturated thermo-conductivity, film-boiling is 1
+    }
+  boundary({temp});
+}
+/******************************* The sun simplified model ***************************************/
+void sun_model (scalar tr, scalar f, scalar temp, double L_h) 
+{
+  face vector v_pc[];
+  foreach()
+    f[] = clamp(f[], 0., 1.);
+  boundary ({f, tr});
+  
+  face vector gtr[];
+  foreach_face()
+    gtr.x[] = (tr[] - tr[-1])/Delta;
+  boundary((scalar*){gtr});
+
+  vector n[];
+  compute_normal (f, n);
+  
+  foreach_face() {
+    v_pc.x[] = 0.;
+
+    if (interfacial(point,f) || interfacial(neighborp(-1), f)) {
+      coord nf;
+      foreach_dimension()
+        nf.x = 0.;
+      if (interfacial(point, f)) {
+        foreach_dimension()
+          nf.x += n.x[];
+      }
+      if (interfacial(neighborp(-1), f)) {
+        nf.x += n.x[-1];
+        nf.y += n.y[-1];
+      }
+   
+      double norm = 0.;
+      foreach_dimension()
+        norm += fabs(nf.x);
+      foreach_dimension()
+        nf.x /= norm;
+      
+      if (nf.x >= 0.) {
+        v_pc.x[] = (fabs(nf.x)*gtr.x[1, 0] + fabs(nf.y)*(nf.y >= 0. ? gtr.x[1, 1] : gtr.x[1, -1]));
+      }
+      else if (nf.x < 0.) {
+        v_pc.x[] = (fabs(nf.x)*gtr.x[-1, 0]+ fabs(nf.y)*(nf.y >= 0. ? gtr.x[-1, 1] : gtr.x[-1, -1]));
+      }
+    }
+  } 
+  boundary((scalar *){v_pc});
+  scalar dd[];
+  face vector f_v[];
+  foreach_face()
+    {
+      dd[] = 1 - f[];
+      f_v.x[] = (dd[1] - dd[-1])/(2*Delta);
+    }
+  boundary((scalar *){f_v});
+
+  foreach()
+    {
+      temp[] = 0;
+      foreach_dimension()
+        temp[] += cm[]*2*0.025*v_pc.x[]*f_v.x[]/L_h; // unsaturated thermo-conductivity, film-boiling is 1
     }
   boundary({temp});
 }
@@ -264,14 +343,14 @@ void lee_model(scalar tr, scalar f, scalar m, double L_h){
     q.x = -n.x, q.y = -n.y;
     double alpha  = plane_alpha (dd[], q);
     line_center (q, alpha,dd[],&p);
-    double T_p;
+    double T_p = 0;
     if(interfacial(point,f))
       T_p = interpolate_2 (point, tr, p); 
     if(interfacial(neighborp(-1,-1),f)&&f[]==1)
       { 
       r_i[] = 0;
       foreach_dimension()
-        r_i[] += 1*tr.tr_eq/(L_h*(0.5+0.5*f[])*Delta*n.x*f[]*rho1);//mass transfer intensity factor expression // saturated thermo-conductivity, film-boiling is 40,but this does not work. it's good for stefan problem
+        r_i[] += 0.68*tr.tr_eq/(L_h*(0.5+0.5*f[])*Delta*n.x*f[]*rho1);//mass transfer intensity factor expression // saturated thermo-conductivity, film-boiling is 40,but this does not work. it's good for stefan problem
       m[] = 2*cm[]*r_i[]*f[]*rho1*(T_p - tr.tr_eq)/tr.tr_eq;
       }
   }
@@ -301,16 +380,21 @@ void tanasawa_model (scalar tr, scalar f, scalar m_dot,  double L_h)
 
 /****************** rattner-model****************************/ 
 // should use with ratter_diffusion() energy diffusion
-void rattner_model (scalar tr, scalar f, scalar m_dot,  double L_h, double dt)
+void rattner_model (scalar tr, scalar f, scalar m_dot,  double L_h, scalar h_s)
 {
   foreach()
     f[] = clamp(f[], 0., 1.);
   boundary({f});
-
+  scalar mass_min_1[], mass_min_2[];
   foreach()
   {
-    if(interfacial(point,f))
-      m_dot[] = tr.rho_cp*(tr[] - tr.tr_eq)/(L_h*dt);  // combined with rattner model
+  if(interfacial(point,f))
+    {
+      //mass_min_1[] = min(tr.rho_cp*(tr[] - tr.tr_eq)/dt,f[]*958*L_h/dt);//the parameters for stefan problem
+      //mass_min_2[] = min(mass_min_1[], L_h/(dt*(1/0.6 - 1/958)));
+    
+      m_dot[] = -h_s[]/L_h;  // combined with rattner model
+    }
   }
   boundary({m_dot});
 }
@@ -332,15 +416,13 @@ void zhang_model (scalar tr, scalar f, scalar m, double L_h)
       double alpha  = plane_alpha (f_v[], n);
       plane_area_center(n, alpha, &s);
       double delta_d = 1.85;// according to the paper, this value is between 1 and 2
+      double xc = s.x-n.x*delta_d;
+      double yc = s.y-n.y*delta_d;
+      coord q;
+      q.x = xc, q.y = yc;
+      double t_center = interpolate_2(point,tr,q);
       if(interfacial(point,f))
-        {
-          double xc = s.x-n.x*delta_d;
-          double yc = s.y-n.y*delta_d;
-          coord q;
-          q.x = xc, q.y = yc;
-          double t_center = interpolate_2(point,tr,q);
-          m[] = 41*(t_center - tr.tr_eq)/(L_h*delta_d*Delta);
-        }
+        m[] = tr.lambda*(t_center - tr.tr_eq)/(L_h*delta_d*Delta);
     }
   boundary({m});
 }
@@ -417,8 +499,8 @@ void zhang_model_2 (scalar tr, scalar f, scalar m, double L_h)
           yc += p.y*Delta;
           xk += k.x*Delta;
           yk += k.y*Delta;
-          coord pp;
-          pp.x = xc, pp.y = yc;// mirror point in local corner neighboring cell
+          //coord pp;
+          //pp.x = xc, pp.y = yc;// mirror point in local corner neighboring cell
           double d1 = fabs(q.x*xc + q.y*yc - alpha_new*Delta - Delta*0.5*(q.x+q.y))/sqrt(sq(q.x) + sq(q.y));// distance for temperature gradient
           //double d1 = sqrt(sq(xk - xc) + sq(yk - yc));
           //double tt = interpolate_1 (point, tr, pp); // using interpolation scheme for temperpoint p
@@ -623,7 +705,7 @@ void mass_hard (scalar tr, scalar f, scalar m, scalar m_0, scalar m_1, double L_
   step-2: smearing the mass flux 
 */
 
-mass_diffusion(m_1,f,m_0);
+mass_diffusion(m_1,m_0);
 
 /*
   step-3: From m[] the complete source-term incorporating evap-

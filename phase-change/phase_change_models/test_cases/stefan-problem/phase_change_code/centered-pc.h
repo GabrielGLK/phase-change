@@ -90,7 +90,7 @@ $\mathbf{g}$ will contain pressure gradients and acceleration terms.
 We will also need an auxilliary face velocity field $\mathbf{u}_f$ and
 the associated centered pressure field $p_f$. */
 
-scalar p[],p_new[];
+scalar p[];
 vector u[], g[];
 scalar pf[];
 face vector uf[];
@@ -358,7 +358,7 @@ event advection_term (i++,last)
 {
   if (!stokes) {
     prediction();
-    mgpf = project (uf, pf, alpha, dt/2., mgpf.nrelax);
+    //mgpf = project (uf, pf, alpha, dt/2., mgpf.nrelax);
     advection ((scalar *){u}, uf, dt, (scalar *){g});
   }
 }

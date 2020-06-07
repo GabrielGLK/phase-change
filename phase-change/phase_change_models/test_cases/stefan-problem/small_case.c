@@ -1,5 +1,5 @@
 #define ADAPT 0
-//#define FILTERED// for largen density and viscosity ratios
+//#define FILTERED// for large density and viscosity ratios
 #include "phase_change_code/centered-pc.h" // change the projection step
 //#include "phase_change_code/double-projection-pc.h"
 #include "phase_change_code/two-phase-pc.h"
@@ -14,8 +14,9 @@
 #if REDUCED
 # include "reduced.h"
 #endif
-
+#define maxlevel 6
 #define level 6
+#define minlevel 5
 #define F_ERR 1e-10
 
 #define T_sat 373.15// could not be zero, because in Lee model for denominator
@@ -23,7 +24,7 @@
 #define T_wall (T_sat + T_sup)
 
 #define cp_1 4216
-#define cp_2 2080
+#define cp_2 2030
 #define lambda_1 0.68
 #define lambda_2 0.025
 #define D_L lambda_1/(rho1*cp_1)
@@ -35,6 +36,7 @@ face vector u_l[];    // liquid face velocity
 face vector uf_new[];
 scalar div_1[];       // one-fluid velocity divergence
 scalar div_2[];       // liquid velocity divergence
+scalar p_new[];
 vector ul[];     // 
 
 /*********************************** temperature tracers **************************************/
@@ -42,17 +44,19 @@ scalar T[], *tracers = {T}; // vapor and liquid temp and use tracer.h to advect 
 
 /************************************ boundary conditions **************************************/
 // outflow boundary conditions on liquid side wall
-T[right] = dirichlet(T_sat);
 p[right] = dirichlet(0);
 pf[right] = dirichlet(0.);
-p_new[right] = dirichlet(0.);
 u.n[right] = neumann(0.);
-
+ul.n[right] = neumann(0.);
 // stationary wall boundary condition on left superheated wall
 T[left] = dirichlet(T_wall);
-pf[left] = dirichlet(0.);
 p_new[left] = dirichlet(0.);
 u.t[left] = dirichlet(0.);
+ul.n[left] = dirichlet(0.);
+
+u_l.n[top] = 0;
+u_l.n[bottom] = 0;
+u_l.n[left] = 0;
 
 int main() {
   size (L0); // square domain 1m each side
@@ -74,6 +78,7 @@ int main() {
 #define plane(x, y, H) (x-H0)
 #define rhoo (1/rho2 - 1/rho1)
 event init (t = 0) {
+  //mask(y>4*L0/(1<<minlevel)?top:none);
   fraction (f,  plane(x,y,H0));
 
   foreach()
@@ -81,7 +86,29 @@ event init (t = 0) {
   foreach_face()
     uf.x[] = 0.;
   boundary({T, uf});
+
+  //unrefine(y>4*L0/(1<<minlevel));
   }
+
+/****************************************** analytical solution **********************************************/
+double erf_function(double a) 
+{ 
+    double f = erf(a); 
+    return f; 
+} 
+
+double coeff(double coef)
+{
+  double b = erf_function(coef);
+  coef*exp(sq(coef))*b == cp_2*T_sup/(L_h*sqrt(pi));
+  return coef;
+}
+
+double exact(double a, double t)
+{
+  double delta = 2*a*sqrt(D_V*t);
+  return delta;
+}
 
 /************************ define mass source *******************************/
 scalar velocity[];     // velocity magnitude
@@ -107,12 +134,13 @@ event mass_flux(i++)
   /*********************************** mass transfer models ***************************************/
   /*************************************************************************************************/
   sharp_simple_model(T,f,m_dot,L_h); // !!!!! change this to different phase change models
-  //lee_model(T,f,m_dot,L_h);
-  //tanasawa_model(T,f,m_dot,L_h); //note:!!! this should be combined with mass_diffusion(), not (m_dot[]*delta_s[])
+  //sun_model(T,f,div_pc,L_h); // !!!!! change this to different phase change models
   //zhang_model(T,f,m_dot,L_h); //note:!!! this should be combined with mass_diffusion(), not (m_dot[]*delta_s[])
   //zhang_model_1(T,f,m_dot,L_h); //note:!!! this should be combined with mass_diffusion(), not (m_dot[]*delta_s[])
   //zhang_model_2(T,f,m_dot,L_h); //note:!!! this should be combined with mass_diffusion(), not (m_dot[]*delta_s[])
   //malan_model(T,f,m_dot,L_h); //note:!!! this should be combined with mass_diffusion(), not (m_dot[]*delta_s[])
+  //tanasawa_model(T,f,m_dot,L_h); //note:!!! this should be combined with mass_diffusion(), not (m_dot[]*delta_s[])
+  //lee_model(T,f,m_dot,L_h);
   //rattner_model(T,f,m_dot,L_h,dt); // this should be checked again, the resource paper is 'NUMERICAL ANALYSIS ON HEAT TRANSFER CHARACTERISTICS OF LOOPED MINICHANNEL USING PHASE-CHANGE VOF METHOD'
   
   /* when calculating the divergenc of velocity, we have three methods:
@@ -123,14 +151,19 @@ event mass_flux(i++)
 
  /* note: two different methods to calculate volumetric mass source terms:
  */
-
+//scalar temp[];
 // method 1: 
   foreach()
-    div_pc[] = m_dot[]*delta_s[];
+   div_pc[] = m_dot[]*delta_s[];
   boundary({div_pc});
+ // mass_diffusion(div_pc,m_dot);
 
+//scalar temp_1[];
 // method 2:
-  //mass_diffusion(div_pc,f,m_dot); //Hardt method for large density ratios
+  //mass_diffusion(temp_1,temp);
+  //foreach()
+    //div_pc[] = temp_1[]*delta_s[];
+  //boundary({div_pc});
 
   
 foreach()
@@ -150,7 +183,7 @@ event vof(i++)
 /******************* step-1: construct entire divergence-free domain *******************/  
   scalar divv[];
   foreach(){
-    divv[] = div_pc[]*rhoo;// !!!!!!!!!!!!! problem here, the phase change velocity too large
+    divv[] = div_pc[]*rhoo;
     //divv[] = div_pc[]; // for volumetric mass source
     divv[] /= dt;
   }
@@ -170,6 +203,9 @@ event vof(i++)
     foreach_dimension()
       div_2[] += (u_l.x[1] - u_l.x[0])/Delta;
   }
+  
+  foreach_boundary(left)
+    div_2[] = 0;
   boundary({div_2});  
 
 /******************* step-2: shift interface accounting for phase-change *******************/  
@@ -177,15 +213,15 @@ event vof(i++)
   {
    /* Note that VOF function is clipped when the interface displacement extends beyond the cell boundary.
    * This could be solved by addig the clipped value to neighbouring cells, which is automatically solved by Basilisk vof solver*/
-  if(f[]>1e-12&&f[]<1-1e-12)
+  if(interfacial(point,f))
     {
-      // f_old = f[];
+      //double f_old = f[];
       coord n = interface_normal( point, f); // interface normal
       double alpha = plane_alpha(f[],n); // distance from original point to interface 
       alpha -= m_dot[]*dt/(Delta*rho1)*sqrt(sq(n.x)+sq(n.y)); // phase-change shifting distance 
-      //alpha -= m_dot[]*dt/(Delta*rho1)*sqrt(sq(n.x)+sq(n.y)); // or use volumetric mass source in vof reconstruction directly
+      //alpha -= div_pc[]*dt/rho1*sqrt(sq(n.x)+sq(n.y)); // or use volumetric mass source in vof reconstruction directly
       f[] = line_area(n.x,n.y,alpha); // cell volume fraction for n+1
-      //div[] = (f_old - f[])/dt*(rho1/rho1 - 1); // for volumetric mass source
+      //div_pc[] = (f_old - f[])/dt*(rho1/rho2 - 1); // for volumetric mass source, a little large for velocity divergence, this will cause large new velocity in extended domain
         /*
       the difference between mass flux(\dot{m}) and volumetric source term (S_h):
       S_h = \dot{m} |\nabla f| = \dot{m} \delta_s
@@ -197,19 +233,35 @@ event vof(i++)
 
         note this!
       */
+     //f[] -= div_pc[]*dt/rho1;
     }
   }
   boundary({f});
 }
+/*
+event tracer_advection(i++){
+  foreach_face()
+    uf.x[] = 0;
+  boundary((scalar *){uf});
+}
+*/
+scalar tt[];
 event tracer_diffusion(i++){
   T.tr_eq = T_sat;
-  scalar dd[]; // volume fraction of vapor
+  scalar dd[],t_av[]; // volume fraction of vapor
   double T_p;
+  vertex scalar t_cor[];
+  foreach_vertex()
+    t_cor[] = (T[] + T[-1,0] + T[0,-1] + T[-1,-1])/4;
+  boundary({t_cor});
   foreach()
     { 
-      /* step-1: determine ghost cell in liquid
+      /* step-1: determine ghost cell in liquid.
+      In Zhang's paper, the ghost cell is defined as:
       1. the mixed cell whose center is outside the interface (use the distance from cell center to interface to determine this)
       2. the pure liquid cell which has a corner neighbor belonging to the mixed cells but not belonging to the ghost cells
+      -> but here we use a special treatment, we calculate the vapor portion barycenter temperature in interface cell. 
+      Then using the coner pure liquid cell to balance the expression: T[] = 2*T.tr_eq - T_p to keep the pure liquid cell saturated state.
       */
       dd[] = 1 - f[];// volume fraction of vapor
       coord n  = interface_normal( point, f) , p, q; // interface normal, barycenter in vapor potion, negative interface normal
@@ -217,36 +269,68 @@ event tracer_diffusion(i++){
       double alpha  = plane_alpha (dd[], q); // cell center to interface but for vapor
       double alpha_l  = plane_alpha (f[], n); // cell center to interface but for vapor
       line_center (q, alpha,dd[],&p); // barycenter in vapor portion 
+      coord pp,qq;
+      //line_length_center (n, alpha_l, &pp); // interface center coordinate
+      double distance_1;
+      pp.x = (alpha_l + 0.5*(n.x + n.y))*n.x + 0.5*(n.x + n.y)*n.x;
+      pp.y = (alpha_l + 0.5*(n.x + n.y))*n.y + 0.5*(n.x + n.y)*n.y;
+      distance_1 = fabs(alpha_l + 0.5*(n.x + n.y) + 0.5*(n.x + n.y));
+      qq.x = pp.x + distance_1*n.x;
+      qq.y = pp.y + distance_1*n.y;
+      if(f[] == 1)
+        T[] = T_sat;
       // if the ghost cell in mixed cell
-      if(interfacial(point,f))
-        T_p = interpolate_1 (point, T, p);
-        //T_p =  interpolate_2(point,T,p);
+      if(interfacial(point,f)&&alpha_l>0.5*(n.x + n.y))
+        //T_p = interpolate_1 (point, T, p);// we calculate the barycenter of interfacial vapor portion temperature
+        {
+          t_av[] = (t_cor[] + t_cor[1,0] + t_cor[0,1] + t_cor[1,1])/4;
+          T_p =  interpolate_2(point,t_av,qq);
+          //T[] = T_p*(1-f[]) + f[]*T_sat;
+          tt[] = T_p;
+        }
 
       // ghost cell method for different situations of interface normal directions, combined with heat_source() function
-      if(n.x<0&&n.y<0)
-        if(interfacial(neighborp(-1,-1),f))
-          T[] = T.tr_eq - T_p; 
-      if(n.x<0&&n.y>0)
-        if(interfacial(neighborp(-1,1),f))
-          T[] = 2*T.tr_eq - T_p;
-      if(n.x>0&&n.y<0)
-        if(interfacial(neighborp(1,-1),f))
-          T[] = 2*T.tr_eq - T_p;
-      if(n.x>0&&n.y>0)
-        if(interfacial(neighborp(1,1),f))
-          T[] = 2*T.tr_eq - T_p;
       if(n.x==0&&n.y>0)
-        if(interfacial(neighborp(0,1),f))
-          T[] = 2*T.tr_eq - T_p;
-      if(n.x==0&&n.y<0)
-        if(interfacial(neighborp(0,-1),f))
-          T[] = 2*T.tr_eq - T_p;
-      if(n.x>0&&n.y==0)
-        if(interfacial(neighborp(1,0),f))
-          T[] = 2*T.tr_eq - T_p;
-      if(n.x<0&&n.y==0)
-        if(interfacial(neighborp(-1,0),f))
-          T[] = 2*T.tr_eq - T_p;
+        {
+          if((interfacial(neighborp(0,1),f)&&f[]==1)||(interfacial(point,f)&&alpha_l<0.5*(n.x + n.y)))
+            T[] = 2*T.tr_eq - T_p;
+        }
+      else if(n.x==0&&n.y<0)
+        {
+          if((interfacial(neighborp(0,-1),f)&&f[]==1)||(interfacial(point,f)&&alpha_l<0.5*(n.x + n.y)))
+            T[] = 2*T.tr_eq - T_p;
+        }
+      else if(n.x>0&&n.y==0)
+        {
+          if((interfacial(neighborp(1,0),f)&&f[]==1)||(interfacial(point,f)&&alpha_l<0.5*(n.x + n.y)))
+            T[] = 2*T.tr_eq - T_p;
+        }
+      else if(n.x<0&&n.y==0)
+        {
+          if((interfacial(neighborp(-1,0),f)&&f[]==1)||(interfacial(point,f)&&alpha_l<0.5*(n.x + n.y)))
+            T[] = 2*T.tr_eq - T_p;
+        }
+
+      else if(n.x<0&&n.y<0)
+        {
+          if((interfacial(neighborp(-1,-1),f)&&f[]==1)||(interfacial(point,f)&&alpha_l<0.5*(n.x + n.y)))
+            T[] = T.tr_eq - T_p;
+        }
+      else if(n.x<0&&n.y>0)
+        {
+          if((interfacial(neighborp(-1,1),f)&&f[]==1)||(interfacial(point,f)&&alpha_l<0.5*(n.x + n.y)))
+            T[] = 2*T.tr_eq - T_p;
+        }
+      else if(n.x>0&&n.y<0)
+        {
+          if((interfacial(neighborp(1,-1),f)&&f[]==1)||(interfacial(point,f)&&alpha_l<0.5*(n.x + n.y)))
+            T[] = 2*T.tr_eq - T_p;
+        }
+      else if(n.x>0&&n.y>0)
+        {
+          if((interfacial(neighborp(1,1),f)&&f[]==1)||(interfacial(point,f)&&alpha_l<0.5*(n.x + n.y)))
+            T[] = 2*T.tr_eq - T_p;
+        }
    
       T[] = clamp(T[],T.tr_eq,T_wall);
       T.D = D_V*f[] + D_L*(1-f[]);
@@ -267,7 +351,7 @@ event tracer_diffusion(i++){
 /* first approximation projection method after prediction of face velocity to compute advection velocity, 
 this step also considers mass source due to projection step
 */
-/*
+
 event advection_term (i++,last)
 {
   if (!stokes) {
@@ -275,7 +359,17 @@ event advection_term (i++,last)
     //// mgpf = project_liquid(uf, pf, alpha, dt/2., mgpf.nrelax,div_pc); // for volumetric mass source
   }
 }
-*/
+
+event acceleration (i++) {
+  face vector av = a;
+  foreach_face()
+    {
+      if (interfacial(point,f)) 
+        av.x[] -= alpha.x[]/fm.x[]*((1/rho2-1/rho1)*sq(m_dot[])*(f[]-f[-1])/Delta); //recoil pressure due to mass transfer
+    }
+  boundary((scalar *){av});
+}
+
 
 event projection(i++){
 /*
@@ -304,7 +398,7 @@ This is for solving the fluid velocity and pressure with phase change.It is simi
 
 #if ADAPT
 event adapt (i++) {
-  adapt_wavelet ({f}, (double[]){1e-6}, 8,6);
+  adapt_wavelet ({f}, (double[]){1e-6}, maxlevel,minlevel);
 }
 #endif
 
@@ -316,7 +410,9 @@ void mg_print (mgstats mg)
 	    mg.nrelax);
 }
 
-event logfile (t = 0; t <= 0.1; t += 0.01) {
+event logfile (t = 0; t <= 10; t += 0.01) {
+  double coef = 0.068;
+  double delta = exact(coef,t);
 
   double xb = 0., vx = 0.,vy = 0., sb = 0.,yb = 0., nu = 0.;
   foreach(reduction(+:xb) reduction(+:vx) reduction(+:sb) reduction(+:yb) reduction(+:vy) reduction(+:nu)) {
@@ -327,8 +423,8 @@ event logfile (t = 0; t <= 0.1; t += 0.01) {
     vy += u.y[]*dv;
     sb += dv; 
   }
-  printf (" %g %g %g %g %g %g %g %g %g %g ", 
-	  t, sb, -1.,  2*xb/sb, yb/sb,vx/sb, vy/sb,dt, perf.t, perf.speed);
+  printf (" %g %g %g %g %g %g %g %g %g %g", 
+	  t, sb, delta,  2*xb/sb, yb/sb,vx/sb, vy/sb,dt, perf.t, perf.speed);
   mg_print (mgp);
   mg_print (mgpf);
   mg_print (mgu);
@@ -337,14 +433,14 @@ event logfile (t = 0; t <= 0.1; t += 0.01) {
 }
 
 // output
-event snap (t+=0.01)
+event snap (t+=0.1)
  {
    char name[80];
    sprintf (name, "snapshot-%g.gfs",t);
    output_gfs (file = name);
  }
 
-event movies (t = 0; t <= 0.1; t += 0.001) {
+event movies (t = 0; t <= 10; t += 0.1) {
   
   foreach()
     f[] = clamp(f[], 0., 1.);
@@ -354,15 +450,22 @@ event movies (t = 0; t <= 0.1; t += 0.001) {
   sprintf(legend, "t = %0.2g", t);
   clear();
 // interface
-  view (tx = 0,ty=-0.5);
+  view (tx = -0.5,ty=-0.5);
   draw_vof ("f",lc = {0,0,0},lw = 2);
   squares("T");
    draw_string(legend, 1, size = 30., lw = 2.);
     box (notics=true,lw=2);
-     mirror({-1}){
-    draw_vof("f",lc = {0,0,0},lw = 2);
-    draw_string(legend, 1, size = 30., lw = 2.);
-     box (notics=true,lw=2);
-}
 save("interface.mp4");
   }
+
+/*
+*** gnuplot ******
+reset
+set size square
+set title 'Stefan problem'
+set xlabel 'Time t'
+set ylabel 'delta'
+set key left
+p [0:10][0:0.002]'out' every 10 u ($1+0.3):4 w p t 'Basilisk simulation',\
+'reference' u 1:2 w l lw 2 lc rgb 'red' t 'Analytical solution'
+*/

@@ -93,24 +93,30 @@ event init (t = 0) {
   }
 
 /****************************************** analytical solution **********************************************/
-double erf_function(double a) 
-{ 
-    double f = erf(a); 
-    return f; 
-} 
-
-double coeff(double coef)
+// Newton interpolation method
+#define TOLER 1e-6
+double coeff()
 {
-  double b = erf_function(coef);
-  coef*exp(sq(coef))*b == cp_2*T_sup/(L_h*sqrt(pi));
-  return coef;
+  double x = 0.05, x_old;  
+  double f, df;
+  do
+  {
+    x_old = x;
+    f = x*exp(sq(x))*erf(x) - cp_2*T_sup/(L_h*sqrt(pi)); 
+    df = 2*sq(x)*exp(sq(x))*erf(x) + exp(sq(x))*erf(x) + 2*x/sqrt(pi);
+    x = x_old - f/df;
+  }while (fabs(x - x_old) > TOLER);
+  return x;
 }
 
-double exact(double a, double t)
+double exact(double delta_x, double t)
 {
-  double delta = 2*a*sqrt(D_V*t);
-  return delta;
+  double a = coeff();
+  delta_x = 2*a*sqrt(D_V*t);
+
+  return delta_x;
 }
+
 
 
 /************************ define mass source *******************************/
@@ -423,8 +429,8 @@ void mg_print (mgstats mg)
 }
 
 event logfile (t = 0; t <= 10; t += 0.01) {
-  double coef = 0.068;
-  double delta = exact(coef,t);
+  double aaa;
+  double delta_interface = exact(aaa,t);
 
   double xb = 0., vx = 0.,vy = 0., sb = 0.,yb = 0., nu = 0.;
   foreach(reduction(+:xb) reduction(+:vx) reduction(+:sb) reduction(+:yb) reduction(+:vy) reduction(+:nu)) {
@@ -436,7 +442,7 @@ event logfile (t = 0; t <= 10; t += 0.01) {
     sb += dv; 
   }
   printf (" %g %g %g %g %g %g %g %g %g %g", 
-	  t, sb, delta,  2*xb/sb, yb/sb,vx/sb, vy/sb,dt, perf.t, perf.speed);
+	  t, sb, delta_interface,  2*xb/sb, yb/sb,vx/sb, vy/sb,dt, perf.t, perf.speed);
   mg_print (mgp);
   mg_print (mgpf);
   mg_print (mgu);

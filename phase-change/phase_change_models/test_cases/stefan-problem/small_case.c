@@ -1,4 +1,4 @@
-#define ADAPT 0
+#define ADAPT 1
 //#define FILTERED// for large density and viscosity ratios
 #include "phase_change_code/centered-pc.h" // change the projection step
 //#include "phase_change_code/double-projection-pc.h"
@@ -27,8 +27,8 @@
 #define cp_2 2030
 #define lambda_1 0.68
 #define lambda_2 0.025
-#define D_L lambda_1/(rho1*cp_1)
-#define D_V lambda_2/(rho2*cp_2)
+#define D_L lambda_1/(rho1*cp_1)//1.68e-7
+#define D_V lambda_2/(rho2*cp_2)//2.05e-5
 #define L_h 2.26e6
 #define L0 0.01
 
@@ -44,14 +44,16 @@ scalar T[], *tracers = {T}; // vapor and liquid temp and use tracer.h to advect 
 
 /************************************ boundary conditions **************************************/
 // outflow boundary conditions on liquid side wall
+T[right] = dirichlet(T_sat);
 p[right] = dirichlet(0);
 pf[right] = dirichlet(0.);
 u.n[right] = neumann(0.);
 ul.n[right] = neumann(0.);
 // stationary wall boundary condition on left superheated wall
 T[left] = dirichlet(T_wall);
+pf[left] = dirichlet(0.);
 p_new[left] = dirichlet(0.);
-u.t[left] = dirichlet(0.);
+u.n[left] = dirichlet(0.);
 ul.n[left] = dirichlet(0.);
 
 u_l.n[top] = 0;
@@ -110,11 +112,12 @@ double exact(double a, double t)
   return delta;
 }
 
+
 /************************ define mass source *******************************/
 scalar velocity[];     // velocity magnitude
 scalar m_dot[];
 scalar div_pc[],ff[];
-face vector evp[];
+face vector evp[];scalar temp[];
 event mass_flux(i++)   
 {
   scalar delta_s[];
@@ -128,11 +131,13 @@ event mass_flux(i++)
       T.lambda = lambda_1*f[]+lambda_2*(1-f[]);
       T.rho_cp = f[]*rho1*cp_1 + (1-f[])*rho2*cp_2;
     }
+    
   /* if you calculate mass flux, we can use several mass transfer models, just change the function names, I have
   already make the parameters in the function same. */
   /*************************************************************************************************/
   /*********************************** mass transfer models ***************************************/
   /*************************************************************************************************/
+
   sharp_simple_model(T,f,m_dot,L_h); // !!!!! change this to different phase change models
   //sun_model(T,f,div_pc,L_h); // !!!!! change this to different phase change models
   //zhang_model(T,f,m_dot,L_h); //note:!!! this should be combined with mass_diffusion(), not (m_dot[]*delta_s[])
@@ -151,12 +156,13 @@ event mass_flux(i++)
 
  /* note: two different methods to calculate volumetric mass source terms:
  */
-//scalar temp[];
+
 // method 1: 
-  foreach()
-   div_pc[] = m_dot[]*delta_s[];
-  boundary({div_pc});
- // mass_diffusion(div_pc,m_dot);
+foreach()
+  temp[] = m_dot[]*delta_s[];
+boundary({temp});
+mass_diffusion(div_pc,temp);
+
 
 //scalar temp_1[];
 // method 2:
@@ -191,7 +197,7 @@ event vof(i++)
   
   // add phase change correction to u_l
   foreach_face()
-    {
+    {  
       uf_new.x[] = -dt*alpha.x[]*face_gradient_x (p_new, 0);
       u_l.x[] = uf.x[] + uf_new.x[];
       ul.x[] = (u_l.x[] + u_l.x[1])/(fm.x[] + fm.x[1] + SEPS);
@@ -213,13 +219,13 @@ event vof(i++)
   {
    /* Note that VOF function is clipped when the interface displacement extends beyond the cell boundary.
    * This could be solved by addig the clipped value to neighbouring cells, which is automatically solved by Basilisk vof solver*/
-  if(interfacial(point,f))
+  if(f[]>1e-12&&f[]<1-1e-12)
     {
       //double f_old = f[];
       coord n = interface_normal( point, f); // interface normal
       double alpha = plane_alpha(f[],n); // distance from original point to interface 
-      alpha -= m_dot[]*dt/(Delta*rho1)*sqrt(sq(n.x)+sq(n.y)); // phase-change shifting distance 
-      //alpha -= div_pc[]*dt/rho1*sqrt(sq(n.x)+sq(n.y)); // or use volumetric mass source in vof reconstruction directly
+      //alpha -= m_dot[]*dt/(Delta*rho1)*sqrt(sq(n.x)+sq(n.y)); // phase-change shifting distance 
+      alpha -= div_pc[]*dt/rho1*sqrt(sq(n.x)+sq(n.y)); // or use volumetric mass source in vof reconstruction directly
       f[] = line_area(n.x,n.y,alpha); // cell volume fraction for n+1
       //div_pc[] = (f_old - f[])/dt*(rho1/rho2 - 1); // for volumetric mass source, a little large for velocity divergence, this will cause large new velocity in extended domain
         /*
@@ -277,14 +283,14 @@ event tracer_diffusion(i++){
       distance_1 = fabs(alpha_l + 0.5*(n.x + n.y) + 0.5*(n.x + n.y));
       qq.x = pp.x + distance_1*n.x;
       qq.y = pp.y + distance_1*n.y;
-      if(f[] == 1)
-        T[] = T_sat;
+      
       // if the ghost cell in mixed cell
       if(interfacial(point,f)&&alpha_l>0.5*(n.x + n.y))
         //T_p = interpolate_1 (point, T, p);// we calculate the barycenter of interfacial vapor portion temperature
         {
           t_av[] = (t_cor[] + t_cor[1,0] + t_cor[0,1] + t_cor[1,1])/4;
           T_p =  interpolate_2(point,t_av,qq);
+          //T_p =  interpolate_2(point,T,qq);
           //T[] = T_p*(1-f[]) + f[]*T_sat;
           tt[] = T_p;
         }
@@ -331,9 +337,15 @@ event tracer_diffusion(i++){
           if((interfacial(neighborp(1,1),f)&&f[]==1)||(interfacial(point,f)&&alpha_l<0.5*(n.x + n.y)))
             T[] = 2*T.tr_eq - T_p;
         }
-   
+
       T[] = clamp(T[],T.tr_eq,T_wall);
-      T.D = D_V*f[] + D_L*(1-f[]);
+      if(f[] == 1)
+        T[] = T_sat;
+        
+      if(interfacial(point,f))
+        T.D = D_L*f[] + D_V*(1-f[]);
+      else 
+        T.D = D_V;
       T.rho = rho1*f[]+rho2*(1-f[]);
       T.cp = cp_1*f[]+cp_2*(1-f[]);
       T.lambda = lambda_1*f[]+lambda_2*(1-f[]);
@@ -365,7 +377,7 @@ event acceleration (i++) {
   foreach_face()
     {
       if (interfacial(point,f)) 
-        av.x[] -= alpha.x[]/fm.x[]*((1/rho2-1/rho1)*sq(m_dot[])*(f[]-f[-1])/Delta); //recoil pressure due to mass transfer
+        av.x[] += alpha.x[]/fm.x[]*((1/rho2-1/rho1)*sq(m_dot[])*(f[]-f[-1])/Delta); //recoil pressure due to mass transfer
     }
   boundary((scalar *){av});
 }
@@ -432,13 +444,50 @@ event logfile (t = 0; t <= 10; t += 0.01) {
   fflush (stdout);
 }
 
-// output
+/*************************************** output ************************************************/
 event snap (t+=0.1)
  {
    char name[80];
    sprintf (name, "snapshot-%g.gfs",t);
    output_gfs (file = name);
  }
+
+event interface_position (t += 0.01) {
+  scalar pos[];
+  position (f, pos, {1,0});
+  double max = statsf(pos).max;
+  char name[80];
+  sprintf (name, "in-pos");
+  static FILE * fp = fopen (name, "w");
+  fprintf (fp, "%g %g\n", t, max);   
+  fflush (fp);
+}
+
+event temperature_value (t+=0.1){
+
+  char *name = NULL;
+  name = (char *) malloc(sizeof(char) * 256);
+  sprintf (name, "temperature/termperature-%.1f",t);
+  FILE*fp1 = fopen (name, "w");
+
+  for (double x = 0; x < L0; x += 0.001)
+      fprintf (fp1, " %g %g\n", x,
+          interpolate (T, x, 0.005)); // generate velocity vector field, at least 12 grids space in liquid thin film(\delta)----reference from "Co-current flow effects on a rising Taylor bubble"
+      fclose(fp1);
+}
+
+event velocity_magnitude (t+=0.1){
+
+  char *name = NULL;
+  name = (char *) malloc(sizeof(char) * 256);
+  sprintf (name, "velocity/velocity-%.1f",t);
+  FILE*fp1 = fopen (name, "w");
+
+  for (double x = 0; x < L0; x += 0.001)
+      fprintf (fp1, " %g %g %g\n", x,
+          interpolate (u.x, x, 0.005),interpolate (u.y, x, 0.005)); // generate velocity vector field, at least 12 grids space in liquid thin film(\delta)----reference from "Co-current flow effects on a rising Taylor bubble"
+      fclose(fp1);
+}
 
 event movies (t = 0; t <= 10; t += 0.1) {
   

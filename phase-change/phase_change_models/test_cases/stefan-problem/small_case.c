@@ -520,7 +520,7 @@ set size square
 set title 'Stefan problem'
 set xlabel 'Time t'
 set ylabel 'delta'
-set key left
-p [0:10][0:0.002]'out' every 10 u ($1+0.3):4 w p t 'Basilisk simulation',\
-'reference' u 1:2 w l lw 2 lc rgb 'red' t 'Analytical solution'
+set key right bottom
+p [0:10][0:0.002]'in-pos' every 20 u ($1+0.29):2 w p pt 'o'  t 'Basilisk-64',\
+'out' u 1:3 w l lw 2 lc rgb 'red' t 'Analytical solution'
 */

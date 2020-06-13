@@ -266,10 +266,10 @@ If we are using VOF or diffuse tracers, we need to advance them (to
 time $t+\Delta t/2$) here. Note that this assumes that tracer fields
 are defined at time $t-\Delta t/2$ i.e. are lagging the
 velocity/pressure fields by half a timestep. */
-event mass_flux (i++,last);
 event vof (i++,last);
 event tracer_advection (i++,last);
 event tracer_diffusion (i++,last);
+
 /**
 The fluid properties such as specific volume (fields $\alpha$ and
 $\alpha_c$) or dynamic viscosity (face field $\mu_f$) -- at time
@@ -278,8 +278,6 @@ $t+\Delta t/2$ -- can be defined by overloading this event. */
 event properties (i++,last) {
   boundary ({alpha, mu, rho, kappa}); // Weugene: kappa added
 }
-
-event tracer_diffusion (i++,last);
 
 /**
 ### Predicted face velocity field

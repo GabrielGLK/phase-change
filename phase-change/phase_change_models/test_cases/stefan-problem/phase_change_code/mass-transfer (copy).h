@@ -1,6 +1,7 @@
 #include "tracer-pc.h"
 #include "vof-pc.h"
 #include "diffusion-pc.h"
+#include "mydiffusion.h"
 #include "curvature.h"
 #include "my_function.h"
 #define F_ERR 1e-10
@@ -24,16 +25,16 @@ double interpolate_1 (Point point, scalar s, coord p)
     // bilinear interpolation when all neighbors are defined
     return ((s[]*(1. - fabs(p.x)) + s[i]*fabs(p.x))*(1. - fabs(p.y)) + 
 	    (s[0,j]*(1. - fabs(p.x)) + s[i,j]*fabs(p.x))*fabs(p.y));
-    else {
+  else {
     // linear interpolation with gradients biased toward the
     // cells which are defined
     double val = s[];
     foreach_dimension() {
       int i = sign(p.x);
       if (f[i])
-	      val += fabs(p.x)*(s[i] - s[]);
+	val += fabs(p.x)*(s[i] - s[]);
       else if (f[-i])
-	      val += fabs(p.x)*(s[] - s[-i]);
+	val += fabs(p.x)*(s[] - s[-i]);
     }
     return val;
   }
@@ -192,8 +193,7 @@ Here we give several different phase-change models, including calculate mass flu
 The introduction of this model in my Github:
 https://github.com/GabrielGLK/phase-change/blob/master/phase-change/README.MD
 */
-
-void sharp_simple_model (scalar tr, scalar f, scalar temp, double L_h) 
+void sharp_simple_model_liquid (scalar tr, scalar f, scalar temp, double L_h) 
 {
   face vector v_pc[];
   foreach()
@@ -228,13 +228,13 @@ void sharp_simple_model (scalar tr, scalar f, scalar temp, double L_h)
       foreach_dimension()
         norm += fabs(nf.x);
       foreach_dimension()
-        nf.x /= norm;
+        nf.x /= -norm;
       
       if (nf.x >= 0.) {
-        v_pc.x[] = (fabs(nf.x)*gtr.x[1,0] + fabs(nf.y)*(nf.y >= 0. ? gtr.x[1, 1] : gtr.x[1, -1]));
+        v_pc.x[] = (fabs(nf.x)*gtr.x[] + fabs(nf.y)*(nf.y >= 0. ? gtr.x[1, 1] : gtr.x[1, -1]));
       }
       else if (nf.x < 0.) {
-        v_pc.x[] = (fabs(nf.x)*gtr.x[-1,0]+ fabs(nf.y)*(nf.y >= 0. ? gtr.x[-1, 1] : gtr.x[-1, -1]));
+        v_pc.x[] = (fabs(nf.x)*gtr.x[]+ fabs(nf.y)*(nf.y >= 0. ? gtr.x[-1, 1] : gtr.x[-1, -1]));
       }
     }
   } 
@@ -244,7 +244,7 @@ void sharp_simple_model (scalar tr, scalar f, scalar temp, double L_h)
       coord nn = normal(point,f);
       temp[] = 0;
       foreach_dimension()
-        temp[] += 2*0.025*v_pc.x[]*nn.x/L_h; // unsaturated thermo-conductivity, film-boiling is 1
+        temp[] += tr.lambda*v_pc.x[]*n.x[]/(sqrt(sq(n.x[]) + sq(n.y[]))*L_h); // unsaturated thermo-conductivity, film-boiling is 1
     }
   boundary({temp});
 }
@@ -287,10 +287,10 @@ void sharp_simple_model_vapor (scalar tr, scalar f, scalar temp, double L_h)
         nf.x /= norm;
       
       if (nf.x >= 0.) {
-        v_pc.x[] = (fabs(nf.x)*gtr.x[1,0] + fabs(nf.y)*(nf.y >= 0. ? gtr.x[1, 1] : gtr.x[1, -1]));
+        v_pc.x[] = (fabs(nf.x)*gtr.x[] + fabs(nf.y)*(nf.y >= 0. ? gtr.x[1, 1] : gtr.x[1, -1]));
       }
       else if (nf.x < 0.) {
-        v_pc.x[] = (fabs(nf.x)*gtr.x[-1,0]+ fabs(nf.y)*(nf.y >= 0. ? gtr.x[-1, 1] : gtr.x[-1, -1]));
+        v_pc.x[] = (fabs(nf.x)*gtr.x[]+ fabs(nf.y)*(nf.y >= 0. ? gtr.x[-1, 1] : gtr.x[-1, -1]));
       }
     }
   } 
@@ -300,67 +300,7 @@ void sharp_simple_model_vapor (scalar tr, scalar f, scalar temp, double L_h)
       coord nn = normal(point,f);
       temp[] = 0;
       foreach_dimension()
-        temp[] += 0.025*v_pc.x[]/L_h; // unsaturated thermo-conductivity, film-boiling is 1
-    }
-  boundary({temp});
-}
-
-void sharp_simple_model_liquid (scalar tr, scalar f, scalar temp, double L_h) 
-{
-  face vector v_pc[];
-  foreach()
-    f[] = clamp(f[], 0., 1.);
-  boundary ({f, tr});
-  
-  face vector gtr[];
-  foreach_face()
-    gtr.x[] = (tr[] - tr[-1])/Delta;
-  boundary((scalar*){gtr});
-
-  vector n[];
-  scalar dd[]; 
-  foreach()
-    dd[] = 1 -f [];
-  boundary({dd});
-  compute_normal (dd, n);
-  
-  foreach_face() {
-    v_pc.x[] = 0.;
-
-    if (interfacial(point,f) || interfacial(neighborp(-1), f)) {
-      coord nf;
-      foreach_dimension()
-        nf.x = 0.;
-      if (interfacial(point, f)) {
-        foreach_dimension()
-          nf.x += n.x[];
-      }
-      if (interfacial(neighborp(-1), f)) {
-        nf.x += n.x[-1];
-        nf.y += n.y[-1];
-      }
-   
-      double norm = 0.;
-      foreach_dimension()
-        norm += fabs(nf.x);
-      foreach_dimension()
-        nf.x /= norm;
-      
-      if (nf.x >= 0.) {
-        v_pc.x[] = (fabs(nf.x)*gtr.x[1] + fabs(nf.y)*(nf.y >= 0. ? gtr.x[1, 1] : gtr.x[1, -1]));
-      }
-      else if (nf.x < 0.) {
-        v_pc.x[] = (fabs(nf.x)*gtr.x[-1]+ fabs(nf.y)*(nf.y >= 0. ? gtr.x[-1, 1] : gtr.x[-1, -1]));
-      }
-    }
-  } 
-  boundary((scalar *){v_pc});
-  foreach()
-    {
-      coord nn = normal(point,f);
-      temp[] = 0;
-      foreach_dimension()
-        temp[] += 0.68*v_pc.x[]/L_h; // unsaturated thermo-conductivity, film-boiling is 1
+        temp[] += tr.lambda*v_pc.x[]*n.x[]/(sqrt(sq(n.x[]) + sq(n.y[]))*L_h); // unsaturated thermo-conductivity, film-boiling is 1
     }
   boundary({temp});
 }
@@ -400,35 +340,31 @@ void sun_model (scalar tr, scalar f, scalar temp, double L_h)
       foreach_dimension()
         norm += fabs(nf.x);
       foreach_dimension()
-        nf.x /= norm;
+        nf.x /= (tr.inverse?norm:-norm);
       
       if (nf.x >= 0.) {
-        v_pc.x[] = (fabs(nf.x)*gtr.x[1] + fabs(nf.y)*(nf.y >= 0. ? gtr.x[1, 1] : gtr.x[1, -1]));
+        v_pc.x[] = (fabs(nf.x)*gtr.x[] + fabs(nf.y)*(nf.y >= 0. ? gtr.x[1, 1] : gtr.x[1, -1]));
       }
       else if (nf.x < 0.) {
-        v_pc.x[] = (fabs(nf.x)*gtr.x[-1]+ fabs(nf.y)*(nf.y >= 0. ? gtr.x[-1, 1] : gtr.x[-1, -1]));
+        v_pc.x[] = (fabs(nf.x)*gtr.x[]+ fabs(nf.y)*(nf.y >= 0. ? gtr.x[-1, 1] : gtr.x[-1, -1]));
       }
     }
   } 
   boundary((scalar *){v_pc});
   scalar dd[];
-  face vector f_v[],f_l[];
+  face vector f_v[];
   foreach_face()
     {
       dd[] = 1 - f[];
-      f_v.x[] = (dd[1] - dd[-1])/(2*Delta);
-      f_l.x[] = (f[1] - f[-1])/(2*Delta);
+      f_v.x[] = -1/(2*Delta);
     }
-  boundary((scalar *){f_v,f_l});
+  boundary((scalar *){f_v});
 
   foreach()
     {
       temp[] = 0;
       foreach_dimension()
-      {if(f[]<1 - 1e-12)
         temp[] += cm[]*tr.lambda*v_pc.x[]*f_v.x[]/L_h; // unsaturated thermo-conductivity, film-boiling is 1
-      else if(f[] > 1 - 1e-12)
-        temp[] += cm[]*tr.lambda*v_pc.x[]*f_l.x[]/L_h;} // unsaturated thermo-conductivity, film-boiling is 1
     }
   boundary({temp});
 }

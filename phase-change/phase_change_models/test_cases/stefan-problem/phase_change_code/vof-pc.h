@@ -312,4 +312,3 @@ void vof_advection (scalar * interfaces, int i)
 
 event vof (i++)
   vof_advection (interfaces, i);
-

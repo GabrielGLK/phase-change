@@ -4,12 +4,12 @@
 #define MALAN_MASS 0 // Leon MALAN's paper mass transfer model
 #define LEE_MASS 0 // Lee model
 #define TANASAWA_MASS 0 // tanasawa model
-#define SUN_MASS 1 // Dongliang Sun's paper model
+#define SUN_MASS 0 // Dongliang Sun's paper model
 #define RATTNER_MASS 0 // Rattner's paper model
-#define ZHANG_MASS 0 // Jie zhang's paper model and modification models
+#define ZHANG_MASS 1 // Jie zhang's paper model and modification models
 /***********************************************************************************************************************/
 /*******************************heat-transfer model options **************************/
-#define ZHANG_DIFFUSION 1 // Jie zhang's paper heat transfer model
+#define ZHANG_DIFFUSION 1// Jie zhang's paper heat transfer model
 #define MALAN_DIFFUSION 0 // Leon MALAN's paper heat ransfer model
 #define NO_FLUX_DIFFUSION 0 // Quentin's sandbox for no diffusion flux excess the interface from vapor
 #define ORIGIN_DIFFUSION 0 // original diffusion equations
@@ -69,6 +69,10 @@
 #if DIRICHLET_ARTIFICIAL_DIFFUSION
 #include "phase_change_code/heat_transfer/dirichlet_artificial_diffusion.h"
 #endif
+
+#if ZHANG_DIFFUSION
+#include "phase_change_code/heat_transfer/zhang_diffusion.h"
+#endif
 /***********************************************************************************************************************/
 #include "phase_change_code/conserving-pc.h" // This file implements momentum-conserving VOF advection of the velocity components for the two-phase Navier-Stokes solver.
 
@@ -92,7 +96,13 @@
 #define T_wall (T_sat + T_sup)
 #define cp_l 4216 // liquid heat capacity
 #define cp_v 2030 
-#define lambda_l 0.68 // liquid conductivity coefficient
+
+#if SUN_MASS
+#define lambda_l 0. // liquid conductivity coefficient
+#else
+#define lambda_l 0.68
+#endif
+
 #define lambda_v 0.025
 #define D_l lambda_l/(rho1*cp_l)//1.68e-7 // liquid diffusion coeffcient, used in 'diffusion.h'
 #define D_v lambda_v/(rho2*cp_v)//2.05e-5
@@ -193,11 +203,12 @@ event init (t = 0) {
 
 /**************** define initial temperature using volume weighted method *************************/
   scalar Cp[];
+  e.inverse = true;
   foreach()
     {
       Cp[] = (rho1*f[]*cp_l + rho2*(1-f[])*cp_v); // volumetric heat capacity
       T[] = (1-f[])*(T_wall - T_sup/H0*x) + f[]*T_sat; // initial temperature
-      e[] = Cp[]*(T[] - 298.15); // initial thermal energy
+      e[] = Cp[]*T[]; // initial thermal energy
     }
   boundary({Cp,T,e});
   }
@@ -216,7 +227,7 @@ event mass_flux(i++)
 // mass flux and volumetric mass flux without rhoo
   foreach()
   {
-    m_dot[] = (m_dot_v[] - m_dot_l[]);
+    m_dot[] = (m_dot_v[] + m_dot_l[]);
     div_pc[] = m_dot[]*delta_s[];
   }
   boundary({m_dot,div_pc});
@@ -248,20 +259,24 @@ event mass_flux(i++)
   #endif
 
   #if ZHANG_MASS
-  //zhang_model(T,f,m_dot,L_h);
-  zhang_model_1(T,f,m_dot,L_h);
+  zhang_model_liquid(T,f,m_dot_l,L_h);
+  zhang_model_vapor(T,f,m_dot_v,L_h);
+  //zhang_model_1(T,f,m_dot,L_h);
   //zhang_model_2(T,f,m_dot,L_h);
   foreach()
+  {
+    m_dot[] = (m_dot_v[] );
     div_pc[] = m_dot[]*delta_s[];
-  boundary({div_pc});
+  }
+  boundary({m_dot,div_pc});
   #endif
-
+  /*
   scalar temp[];
   foreach()
     temp[] = div_pc[];
   boundary({temp});
   mass_diffusion(div_pc,temp);
-
+  */
   scalar ff[];
   foreach()
     ff[] = clamp(ff[],0,1);
@@ -278,6 +293,9 @@ event mass_flux(i++)
 }
 
 /********************************** vof advection with mass source **********************/
+#if THERMAL_ENERGY
+static scalar * interfaces_save = NULL;
+#endif
 event vof(i++)
 {
 /******************* step-1: construct entire divergence-free domain *******************/  
@@ -305,6 +323,16 @@ event vof(i++)
       div_2[] += (u_l.x[1] - u_l.x[0])/Delta;
   }
 
+//We set the list of interfaces to NULL so that the default vof() event does nothing (otherwise we would transport f twice).
+  #if THERMAL_ENERGY
+  e.gradient = minmod2;; 
+  f.tracers = {e}; // using same approach of vof for thermal energy, multi-dimentional advection 
+  boundary({f, e});
+  
+  vof_advection ({f}, i);
+  interfaces_save = interfaces;
+  interfaces = NULL;
+  #endif
 /******************* step-2: shift interface accounting for phase-change *******************/  
   foreach()
   {
@@ -324,11 +352,13 @@ event vof(i++)
     }
   }
   boundary({f});
-  #if THERMAL_ENERGY
-  f.tracers = {e}; // using same approach of vof for thermal energy, multi-dimentional advection 
-  #endif
 }
 
+event tracer_advection (i++) {
+  #if THERMAL_ENERGY
+  interfaces = interfaces_save;
+  #endif
+}
 /******************************************** energy diffusion ********************************/
 event tracer_diffusion(i++)
 {
@@ -342,7 +372,11 @@ event tracer_diffusion(i++)
     T.rho_cp = f[]*rho1*cp_l + (1-f[])*rho2*cp_v;
     T.lambda = lambda_l*f[]+lambda_v*(1-f[]);
     //T.D = D_V*(1-f[]) + D_L*f[];
+    #if SUN_MASS
+    T.D = D_v;
+    #else
     T.D = D_v*(1-f[]) + D_l*f[];
+    #endif
   }
 
    // we have the intermediate thermal energy in the cell (after the sweep) and can calculate the intermediate temperature
@@ -372,88 +406,7 @@ event tracer_diffusion(i++)
   T[] = 2*T.tr_eq - T_p as the artificial temperature in the ghost cell. 
 */
   #if ZHANG_DIFFUSION
-  scalar dd[],t_av[]; // volume fraction of vapor
-  double T_p;
-  vertex scalar t_cor[];
-  foreach_vertex()
-    t_cor[] = (T[] + T[-1,0] + T[0,-1] + T[-1,-1])/4;
-  boundary({t_cor});
-  foreach()
-    { 
-      dd[] = 1 - f[];// volume fraction of vapor
-      coord n  = interface_normal( point, f) , p, q; // interface normal, barycenter in vapor potion, negative interface normal
-      q.x = -n.x, q.y = -n.y; 
-      double alpha  = plane_alpha (dd[], q); // cell center to interface but for vapor
-      double alpha_l  = plane_alpha (f[], n); // cell center to interface but for vapor
-      line_center (q, alpha,dd[],&p); // barycenter in vapor portion 
-      coord pp,qq;
-      //line_length_center (n, alpha_l, &pp); // interface center coordinate
-      double distance_1;
-      pp.x = (alpha_l + 0.5*(n.x + n.y))*n.x + 0.5*(n.x + n.y)*n.x;
-      pp.y = (alpha_l + 0.5*(n.x + n.y))*n.y + 0.5*(n.x + n.y)*n.y;
-      distance_1 = fabs(alpha_l + 0.5*(n.x + n.y) + 0.5*(n.x + n.y));
-      qq.x = pp.x + distance_1*n.x;
-      qq.y = pp.y + distance_1*n.y;
-      
-      // if the ghost cell in mixed cell
-      if(interfacial(point,f)&&alpha_l>0.5*(n.x + n.y))
-        {
-          t_av[] = (t_cor[] + t_cor[1,0] + t_cor[0,1] + t_cor[1,1])/4;
-          T_p =  interpolate_2(point,t_av,qq);
-          //T_p =  interpolate_2(point,t_av,qq);
-          //T_p = interpolate_1 (point, T, p);// we calculate the barycenter of interfacial vapor portion temperature
-          //T[] = T_p*(1-f[]) + f[]*T_sat;
-        
-
-      // ghost cell method for different situations of interface normal directions, combined with heat_source() function
-      if(n.x==0&&n.y>0)
-        {
-          if((f[0,-1]==1)||(interfacial(point,f)&&alpha_l<0.5*(n.x + n.y)))
-            T[] = 2*T.tr_eq - T_p;
-        }
-      else if(n.x==0&&n.y<0)
-        {
-          if((interfacial(neighborp(0,1),f)&&f[]==1)||(interfacial(point,f)&&alpha_l<0.5*(n.x + n.y)))
-            T[] = 2*T.tr_eq - T_p;
-        }
-      else if(n.x>0&&n.y==0)
-        {
-          if((interfacial(neighborp(-1,0),f)&&f[]==1)||(interfacial(point,f)&&alpha_l<0.5*(n.x + n.y)))
-            T[] = 2*T.tr_eq - T_p;
-        }
-      else if(n.x<0&&n.y==0)
-        {
-          if((interfacial(neighborp(1,0),f)&&f[]==1)||(interfacial(point,f)&&alpha_l<0.5*(n.x + n.y)))
-            T[] = 2*T.tr_eq - T_p;
-        }
-
-      else if(n.x<0&&n.y<0)
-        {
-          if((interfacial(neighborp(1,1),f)&&f[]==1)||(interfacial(point,f)&&alpha_l<0.5*(n.x + n.y)))
-            T[] = T.tr_eq - T_p;
-        }
-      else if(n.x<0&&n.y>0)
-        {
-          if((interfacial(neighborp(1,-1),f)&&f[]==1)||(interfacial(point,f)&&alpha_l<0.5*(n.x + n.y)))
-            T[] = 2*T.tr_eq - T_p;
-        }
-      else if(n.x>0&&n.y<0)
-        {
-          if((interfacial(neighborp(-1,1),f)&&f[]==1)||(interfacial(point,f)&&alpha_l<0.5*(n.x + n.y)))
-            T[] = 2*T.tr_eq - T_p;
-        }
-      else if(n.x>0&&n.y>0)
-        {
-          if((interfacial(neighborp(-1,-1),f)&&f[]==1)||(interfacial(point,f)&&alpha_l<0.5*(n.x + n.y)))
-            T[] = 2*T.tr_eq - T_p;
-        }
-        }
-      //T[] = clamp(T[],T.tr_eq,T_wall);
-      //if(f[] == 1)
-        //T[] = T_sat;
-    }
-    
-  diffusion(T,dt, D = diffusion_coef);
+  zhang_diffusion_vapor(T,f, heat_s,L_h);
   #endif
 
   
@@ -463,16 +416,13 @@ event tracer_diffusion(i++)
   #endif
 
   #if NO_FLUX_DIFFUSION
-  foreach()
-    T[] = clamp(T[],T.tr_eq,T_wall);
-  boundary({T});
+  //foreach()
+    //T[] = clamp(T[],T.tr_eq,T_wall);
+  //boundary({T});
   no_flux_diffusion(T,f,dt);
   #endif
 
   #if ORIGIN_DIFFUSION
-  foreach()
-    T[] = clamp(T[],T.tr_eq,T_wall);
-  boundary({T});
   heat_source (T, f, div_pc, L_h);// add heat source term in diffusion equation
   #endif
 

@@ -87,7 +87,7 @@
 
 // grid level
 #define maxlevel 6
-#define level 7
+#define level 6
 #define minlevel 5
 
 /*************** physical properties ****************************/
@@ -512,11 +512,38 @@ double coeff()
   return x;
 }
 
+// interface position
 double exact(double t)
 {
   double a = coeff();
   double delta_x = 2*a*sqrt(D_v*t);
   return delta_x;
+}
+
+// analytical temperature
+
+double temper(double t, double x)
+{
+
+  double a = coeff();
+  double temp_x = T_wall + ((T_sat - T_wall))/erf(a)*erf(x/(2*sqrt(t*D_v)));
+
+  return temp_x;
+}
+event temperature_analy(t = 0.29; t += 1)
+{
+  
+  char *name = NULL;
+  name = (char *) malloc(sizeof(char) * 256);
+  sprintf (name, "temperature/temperature-analy-%.1f",t);
+  FILE*fp1 = fopen (name, "w");
+
+  double xx = exact(t);
+  for (double x = 0; x <= xx; x += 0.00001)
+      fprintf (fp1, " %g %g\n", x, temper(t,x)); 
+  for (double x = xx; x <= L0; x += 0.001)
+      fprintf (fp1, " %g %g\n", x, 373.15); 
+  fclose(fp1);
 }
 
 /*************************************** output ************************************************/
@@ -591,14 +618,13 @@ event interface_position (t += 0.01) {
   fflush (fp);
 }
 
-event temperature_value (t+=0.1){
-
+event temperature_value (t+=1){
   char *name = NULL;
   name = (char *) malloc(sizeof(char) * 256);
-  sprintf (name, "temperature/termperature-%.1f",t);
+  sprintf (name, "temperature/temperature-%.1f",t);
   FILE*fp1 = fopen (name, "w");
 
-  for (double x = 0; x < L0; x += 0.001)
+  for (double x = 0; x < L0; x += 0.0001)
       fprintf (fp1, " %g %g\n", x,
           interpolate (T, x, 0.005)); // generate velocity vector field, at least 12 grids space in liquid thin film(\delta)----reference from "Co-current flow effects on a rising Taylor bubble"
       fclose(fp1);

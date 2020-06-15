@@ -4,15 +4,15 @@
 #define MALAN_MASS 0 // Leon MALAN's paper mass transfer model
 #define LEE_MASS 0 // Lee model
 #define TANASAWA_MASS 0 // tanasawa model
-#define SUN_MASS 0 // Dongliang Sun's paper model
+#define SUN_MASS 1 // Dongliang Sun's paper model
 #define RATTNER_MASS 0 // Rattner's paper model
-#define ZHANG_MASS 1 // Jie zhang's paper model and modification models
+#define ZHANG_MASS 0 // Jie zhang's paper model and modification models
 /***********************************************************************************************************************/
 /*******************************heat-transfer model options **************************/
 #define ZHANG_DIFFUSION 1// Jie zhang's paper heat transfer model
-#define MALAN_DIFFUSION 0 // Leon MALAN's paper heat ransfer model
 #define NO_FLUX_DIFFUSION 0 // Quentin's sandbox for no diffusion flux excess the interface from vapor
-#define ORIGIN_DIFFUSION 0 // original diffusion equations
+#define ORIGIN_DIFFUSION 1 // original diffusion equations
+#define MALAN_DIFFUSION 0 // Leon MALAN's paper heat ransfer model
 #define RATTNER_DIFFUSION 0
 #define DIRICHLET_ARTIFICIAL_DIFFUSION 0 //give an artifical temperature boundary condition at interface
 /***********************************************************************************************************************/
@@ -87,7 +87,7 @@
 
 // grid level
 #define maxlevel 6
-#define level 6
+#define level 7
 #define minlevel 5
 
 /*************** physical properties ****************************/
@@ -265,11 +265,12 @@ event mass_flux(i++)
   //zhang_model_2(T,f,m_dot,L_h);
   foreach()
   {
-    m_dot[] = (m_dot_v[] );
+    m_dot[] = (m_dot_v[] - m_dot_l[]);
     div_pc[] = m_dot[]*delta_s[];
   }
   boundary({m_dot,div_pc});
   #endif
+  
   /*
   scalar temp[];
   foreach()
@@ -277,6 +278,7 @@ event mass_flux(i++)
   boundary({temp});
   mass_diffusion(div_pc,temp);
   */
+
   scalar ff[];
   foreach()
     ff[] = clamp(ff[],0,1);
@@ -359,6 +361,7 @@ event tracer_advection (i++) {
   interfaces = interfaces_save;
   #endif
 }
+scalar tt[];
 /******************************************** energy diffusion ********************************/
 event tracer_diffusion(i++)
 {
@@ -396,17 +399,12 @@ event tracer_diffusion(i++)
     heat_s[] = div_pc[]*L_h/T.rho_cp;
   boundary({heat_s});
 /*************************************************heat transfer models**********************************************************/
-/********************************** model-1: Zhang-diffusion model *************************************/
-/*
-  This model uses one called ghost cell method to maintain the liquid–vapor interface at the saturating temperature.
-  Ghost cell (e.g. liquid is saturated fluid):
-  1). the mixed cell whose center is outside the interface
-  2). the pure vapor cell which has a corner neighbor belonging to the mixed cells but not belonging to the ghost cells.
-
-  T[] = 2*T.tr_eq - T_p as the artificial temperature in the ghost cell. 
-*/
   #if ZHANG_DIFFUSION
-  zhang_diffusion_vapor(T,f, heat_s,L_h);
+  //foreach()
+    //T[] = clamp(T[],T.tr_eq,T_wall);
+  //boundary({T});
+  zhang_diffusion_liquid(T,f, tt);
+  //zhang_diffusion_vapor(T,f, tt);
   #endif
 
   
@@ -423,7 +421,7 @@ event tracer_diffusion(i++)
   #endif
 
   #if ORIGIN_DIFFUSION
-  heat_source (T, f, div_pc, L_h);// add heat source term in diffusion equation
+  heat_source (T, f, div_pc);// add heat source term in diffusion equation
   #endif
 
   #if RATTNER_DIFFUSION

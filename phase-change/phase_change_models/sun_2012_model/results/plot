@@ -1,0 +1,22 @@
+// stefan flow
+reset
+set size square
+set title 'Stefan problem interface position'
+set xlabel 'Time t(s)'
+set ylabel 'delta(mm)'
+set key right bottom
+p [0:10][0:0.002]'in-pos-32' every 40 u ($1+0.28):2 w p ls 1  t 'Basilisk-32',\
+'in-pos-64' every 40 u ($1+0.28):2 w p ls 2  t 'Basilisk-64',\
+'in-pos-128' every 40 u ($1+0.28):2 w p ls 3  t 'Basilisk-128',\
+'out' u 1:3 w l lw 2 lc rgb 'red' t 'Analytical solution'
+
+reset
+set size square
+set title 'Stefan problem interface position'
+set xlabel 'Time t(s)'
+set ylabel 'delta(mm)'
+set key right bottom
+p [0:10][0:0.002]'in-pos-32' every 40 u ($1+0.28):2 w p ls 1  t 'Basilisk-32',\
+'in-pos-64' every 40 u ($1+0.28):2 w p ls 2  t 'Basilisk-64',\
+'in-pos-128' every 40 u ($1+0.28):2 w p ls 3  t 'Basilisk-128',\
+'out' u 1:3 w l lw 2 lc rgb 'red' t 'Analytical solution'

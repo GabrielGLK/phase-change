@@ -914,7 +914,7 @@ contains
                 if (v(i,je,k)>=0) then
                    work(i,je,k,2)=face_plus(i,je,k)*v(i,je,k)*dt/dh
                 else
-                   work(i,je,k,2)=rho_cp(i,je+1,k)*T_bdry*v(i,je,k)*dt/dh
+                   work(i,je,k,2)=rho_cp(i,je+1,k)*T_bdry*v(i,je,k)*dt/dh!convection term
                 endif
              enddo
           enddo
@@ -1002,7 +1002,7 @@ subroutine get_heat_source(rho1,rho2,tstep)
               do i0=-1,1; do j0=-1,1; do k0=-1,1
                  stencil3x3(i0,j0,k0) = cvof(i+i0,j+j0,k+k0)
               enddo;enddo;enddo
-              call mycs(stencil3x3,nr)
+              call mycs(stencil3x3,nr)!mixed youngs centered scheme for interface normal
               n1(i,j,k) = nr(1)
               n2(i,j,k) = nr(2)
               n3(i,j,k) = nr(3)
@@ -1057,7 +1057,7 @@ subroutine get_heat_source(rho1,rho2,tstep)
                  if ( vof_flag(i+i0,j+j0,k+k0)==phase .and. &
                       (topo_mask(i+i0,j+j0,k+k0)==phase_sign .or. topo_mask(i+i0,j+j0,k+k0)==2*phase_sign) ) then
                     if (i0==0 .and. j0==0 .and. k0==0) call pariserror('Topological error')
-                    m(1)=n1(i,j,k); m(2)=n2(i,j,k); m(3)=n3(i,j,k)  
+                    m(1)=n1(i,j,k); m(2)=n2(i,j,k); m(3)=n3(i,j,k)  !transformation vector
                     magm=sqrt(m(1)**2.0d0+m(2)**2.0d0+m(3)**2.0d0)
                     magpos=sqrt( (x(i)-x(i+i0))**2.d0 + (y(j)-y(j+j0))**2.d0 + (z(k)-z(k+k0))**2.d0 )
                     npos(1)=(x(i+i0)-x(i))/magpos
@@ -1072,7 +1072,7 @@ subroutine get_heat_source(rho1,rho2,tstep)
                  endif
               enddo; enddo; enddo !neighbour loop
               if (nbr_count>0.9d0) then
-                 phase_heat(phase)=phase_heat(phase)/drel_t              
+                 phase_heat(phase)=phase_heat(phase)/drel_t   !mass flux           
               else
                  write(*,'("Topological error, no bulk neighbours to mixed cell")')
                  write(*,'("CVoF, flag, phase, i,j,k: ",e14.5,5I5)')cvof(i,j,k),vof_flag(i,j,k),phase,i,j,k
@@ -1094,7 +1094,7 @@ subroutine get_heat_source(rho1,rho2,tstep)
               endif
            enddo ! phase
            
-           mdot(i,j,k)=sum(phase_heat(0:1))
+           mdot(i,j,k)=sum(phase_heat(0:1))!calculate the mass flux
            if (ngradT_test) then
               mcount=mcount+1   
               if (test_droplet) then
@@ -1124,11 +1124,11 @@ subroutine get_heat_source(rho1,rho2,tstep)
         endif
      endif
   else ! type 1, constant mass transfer rate per unit area
-     mdotc=q_set/h_fg
+     mdotc=q_set/h_fg!constant mass flux
      do k=ks,ke; do j=js,je; do i=is,ie
-        if (topo_mask(i,j,k)==0) then
+        if (topo_mask(i,j,k)==0) then!mixed cell
            mdot(i,j,k) = q_set/h_fg
-           s_v(i,j,k) = mdot(i,j,k)*inv_drho*cell_area(i,j,k)/dh
+           s_v(i,j,k) = mdot(i,j,k)*inv_drho*cell_area(i,j,k)/dh!constant volumetric mass source
         endif
      enddo; enddo; enddo
   endif
@@ -1273,7 +1273,7 @@ contains
                        crdshift(1)=(x(i)-xh(i+i0)+dh)/dh
                        crdshift(2)=(y(j)-yh(j+j0)+dh)/dh
                        crdshift(3)=(z(k)-zh(k+k0)+dh)/dh
-                       alpha_d_shift=alpha_d-(m(1)/magm*crdshift(1)+m(2)/magm*crdshift(2)+m(3)/magm*crdshift(3))
+                       alpha_d_shift=alpha_d-(m(1)/magm*crdshift(1)+m(2)/magm*crdshift(2)+m(3)/magm*crdshift(3))!normal gradient distance
                        !calc normal distance to neighbour node
                        dint(i,j,k)=ABS(alpha_d_shift*dh)
                     endif ! largest collinearity of rel cell pos and plane normal vectors
@@ -1285,7 +1285,7 @@ contains
               if (ngradT_test) then
                  count=count+1   
                  if (test_droplet) then
-                    d_theory= ABS( sqrt( (x(i)-xc(1))**2.d0 + (y(j)-yc(1))**2.d0 + (z(k)-zc(1))**2.d0) - rad(1))
+                    d_theory= ABS( sqrt( (x(i)-xc(1))**2.d0 + (y(j)-yc(1))**2.d0 + (z(k)-zc(1))**2.d0) - rad(1))!test
                  else if (test_plane) then
                     d_theory=ABS(y(j)-plane) !!KYKHIER
                     call pariserror('No plane test yet...drop is tougher test than plane.')
@@ -1330,7 +1330,7 @@ subroutine vofandenergysweeps(tswap)
 
   if (VOF_advect=='Dick_Yue') call c_mask(cvof, work(:,:,:,2))
   if (MOD(tswap,3).eq.0) then  ! do z then x then y 
-     call swp_energy(3)
+     call swp_energy(3)!先能量然后vof
      call swp(w_l,cvof,vof_flag,3,work(:,:,:,1),work(:,:,:,2),work(:,:,:,3))
      call ThermalEnBC
 
@@ -1413,7 +1413,7 @@ subroutine swp_energy(d)
 
 end subroutine swp_energy
 
-subroutine swpr_energy(us,ul_adv,c,d,cg)
+subroutine swpr_energy(us,ul_adv,c,d,cg)!Dick_YUE
   use module_grid
   use module_boil
   use module_flow
@@ -1433,15 +1433,15 @@ subroutine swpr_energy(us,ul_adv,c,d,cg)
   if(ng.lt.2) call pariserror("wrong ng")
   dh = dxh(is) ! Only uniform grids!
 
-  if (EtAdvScheme=='WENO5') then
+  if (EtAdvScheme=='WENO5') then!face tempearture
      do k=ks,ke
         do j=js,je
            do i=is,ie         
-              rhocp_ll=(rho2*cp2*c(i-2*i0,j-2*j0,k-2*k0)+rho1*cp1*(1.d0-c(i-2*i0,j-2*j0,k-2*k0)))
-              rhocp_l =(rho2*cp2*c(i-  i0,j-  j0,k-  k0)+rho1*cp1*(1.d0-c(i-  i0,j-  j0,k-  k0)))
-              rhocp_c =(rho2*cp2*c(i     ,j     ,k     )+rho1*cp1*(1.d0-c(i     ,j     ,k     )))
-              rhocp_r =(rho2*cp2*c(i+  i0,j+  j0,k+k0  )+rho1*cp1*(1.d0-c(i+i0  ,j+j0  ,k+k0  )))
-              rhocp_rr=(rho2*cp2*c(i+2*i0,j+2*j0,k+2*k0)+rho1*cp1*(1.d0-c(i+2*i0,j+2*j0,k+2*k0)))
+              rhocp_ll=(rho2*cp2*c(i-2*i0,j-2*j0,k-2*k0)+rho1*cp1*(1.d0-c(i-2*i0,j-2*j0,k-2*k0)))!i-2
+              rhocp_l =(rho2*cp2*c(i-  i0,j-  j0,k-  k0)+rho1*cp1*(1.d0-c(i-  i0,j-  j0,k-  k0)))!i-1
+              rhocp_c =(rho2*cp2*c(i     ,j     ,k     )+rho1*cp1*(1.d0-c(i     ,j     ,k     )))!i
+              rhocp_r =(rho2*cp2*c(i+  i0,j+  j0,k+k0  )+rho1*cp1*(1.d0-c(i+i0  ,j+j0  ,k+k0  )))!i+1
+              rhocp_rr=(rho2*cp2*c(i+2*i0,j+2*j0,k+2*k0)+rho1*cp1*(1.d0-c(i+2*i0,j+2*j0,k+2*k0)))!i+2
 
               T_avg = energy(i,j,k)/(rhocp_c)
 
@@ -1482,7 +1482,7 @@ subroutine swpr_energy(us,ul_adv,c,d,cg)
               else
                  T_l=T_min(i,j,k)
               endif
-           else
+           else!不使用weno计算，简单插值
               rhocp_l =(rho2*cp2*c(i-i0,j-j0,k-k0)+rho1*cp1*(1.d0-c(i-i0,j-j0,k-k0)))
               rhocp_c =(rho2*cp2*c(i   ,j   ,k   )+rho1*cp1*(1.d0-c(i   ,j   ,k   )))
               rhocp_r =(rho2*cp2*c(i+i0,j+j0,k+k0)+rho1*cp1*(1.d0-c(i+i0,j+j0,k+k0)))
@@ -1607,7 +1607,7 @@ subroutine swpr_energy(us,ul_adv,c,d,cg)
 
 end subroutine swpr_energy
 
-subroutine swpz_energy(us,ul_adv,c,d)
+subroutine swpz_energy(us,ul_adv,c,d)!CIAM
   use module_grid
   use module_VOF
   use module_flow
@@ -1692,7 +1692,7 @@ subroutine swpz_energy(us,ul_adv,c,d)
            endif
 
            T_adv = energy(i,j,k)/(rhocp_c)
-           
+           !need to consider in Basilisk
            en1(i,j,k)=0.d0; en2(i,j,k)=0.d0; en3(i,j,k)=0.d0
            if (topo_mask(i,j,k)==0) then
               do i1=-1,1; do j1=-1,1; do k1=-1,1
@@ -1708,7 +1708,7 @@ subroutine swpz_energy(us,ul_adv,c,d)
               if(a1<0.d0) then
                  x0(d)=a1
                  deltax(d)=-a1
-                 vof_c = fl3d(nr,alpha,x0,deltax)
+                 vof_c = fl3d(nr,alpha,x0,deltax)!vof calculation
                  en1(i,j,k) = ( rho2*cp2*vof_c+rho1*cp1*(-a1-vof_c) )*T_l
               endif
               if(a2>0.d0) then
@@ -1906,7 +1906,7 @@ subroutine get_energy
 end subroutine get_energy
 
 !Fill boundary energies using Te and CVOF in the boundaries
-subroutine SetBoundaryEnergy !设置网格边界能量
+subroutine SetBoundaryEnergy !设置网格中心能量
   use module_grid
   use module_boil
   use module_flow
@@ -2195,7 +2195,7 @@ contains
   end function correct
 end subroutine phase_change_vel_correction
 
-subroutine get_ghost_masks
+subroutine get_ghost_masks!this method can not be used in Basilisk
   use module_grid
   use module_VOF
   use module_BC

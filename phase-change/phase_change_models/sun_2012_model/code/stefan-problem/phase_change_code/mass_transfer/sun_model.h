@@ -26,7 +26,7 @@ void sun_model_center (scalar tr, scalar f, scalar temp, double L_h)
         }
     }
   boundary({f_v,gd});
-/*
+/* //the segregation method, to avoid interface smearing while declaring mass transfer
   foreach()
     {
       if(interfacial(point,f)&&f[-1] == 0)

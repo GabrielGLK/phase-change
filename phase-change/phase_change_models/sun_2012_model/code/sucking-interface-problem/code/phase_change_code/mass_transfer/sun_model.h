@@ -39,10 +39,10 @@ void sun_model (scalar tr, scalar f, scalar temp, double L_h)
       foreach_dimension()
         nf.x /= norm;
       
-      if (nf.x >= 0.) {
+      if (nf.x <= 0.) {
         grad_t.x[] = (fabs(nf.x)*gtr.x[1,0] + fabs(nf.y)*(nf.y >= 0. ? gtr.x[1, 1] : gtr.x[1, -1]));
       }
-      else if (nf.x < 0.) {
+      else if (nf.x > 0.) {
         grad_t.x[] = (fabs(nf.x)*gtr.x[-1,0]+ fabs(nf.y)*(nf.y >= 0. ? gtr.x[-1, 1] : gtr.x[-1, -1]));
       }
     }
@@ -62,7 +62,7 @@ void sun_model (scalar tr, scalar f, scalar temp, double L_h)
     {
       temp[] = 0;
       foreach_dimension()
-        temp[] += 0.025*grad_t.x[]*f_v.x[]/L_h; // unsaturated thermo-conductivity, film-boiling is 1
+        temp[] -= 0.0015*grad_t.x[]*f_v.x[]/L_h; // unsaturated thermo-conductivity, film-boiling is 1
     }
   boundary({temp});
 }

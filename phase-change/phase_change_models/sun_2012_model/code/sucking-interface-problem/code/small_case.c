@@ -7,12 +7,15 @@
 #include "phase_change_code/two-phase-pc.h" // two-phase flow model
 #include "phase_change_code/tracer-pc.h" // passive tracer (advection equation)
 #include "tension.h" // surface tension model
-/*********************************************** heat transfer model *********************************************/
 #include "phase_change_code/heat-transfer.h" // diffusion equations
 #include "phase_change_code/mass_transfer/mass_diffusion.h" // use Hardt method to do volume diffusion or mass diffusion
 /*********************************************** phase-chnage models *********************************************/
+/********************************************* mass transfer models options **********************************************/
 #include "phase_change_code/mass_transfer/sun_model.h"
-
+/***********************************************************************************************************************/
+/********************************************* heat transfer models options **********************************************/
+#include "phase_change_code/heat_transfer/zhang_diffusion.h"
+/***********************************************************************************************************************/
 #include "phase_change_code/conserving-pc.h" // This file implements momentum-conserving VOF advection of the velocity components for the two-phase Navier-Stokes solver.
 
 #if REDUCED
@@ -26,24 +29,23 @@
 
 // grid level
 #define maxlevel 6
-#define level 6
+#define level 7
 #define minlevel 5
 
 /*************** physical properties ****************************/
 #define T_sat 373.15// could not be zero, because in Lee model for denominator
-#define T_sup 10 // difference between wall and saturated temperatures
+#define T_sup 12 // difference between wall and saturated temperatures
 #define T_wall (T_sat + T_sup)
-#define cp_l 4216 // liquid heat capacity
-#define cp_v 2030 
+#define cp_l 10 // liquid heat capacity
+#define cp_v 10 
 
+#define lambda_l 0.0015 // liquid conductivity coefficient
 
-#define lambda_l 0.025 // liquid conductivity coefficient equals to vapor coefficient
-
-#define lambda_v 0.025
+#define lambda_v 0.0035
 #define D_l lambda_l/(rho1*cp_l)//1.68e-7 // liquid diffusion coeffcient, used in 'diffusion.h'
 #define D_v lambda_v/(rho2*cp_v)//2.05e-5
-#define L_h 2.26e6 // latent heat 
-#define L0 0.01 // domain size
+#define L_h 100 // latent heat 
+#define L0 1 // domain size
 #define rhoo (1/rho2 - 1/rho1) // used in mass source term 
 
 
@@ -69,22 +71,23 @@ scalar velocity_pc[];  // velocity magnitude with phase-change
 // vector declaration, cell center
 vector ul[];     // subdomain cell center velocity
 /***********************************************************************************************/
-
 scalar *tracers = {T}; // scalar tracers list
 
 /************************************ boundary conditions **************************************/
 // outflow boundary conditions on liquid side wall
-T[right] = dirichlet(T_sat);
+T[right] = dirichlet(T_wall);
 p[right] = dirichlet(0);
 pf[right] = dirichlet(0.);
 u.n[right] = neumann(0.);
 
-T[left] = dirichlet(T_wall);
+T[left] = dirichlet(T_sat);
 //e[left] = dirichlet(T_wall*cp_v*rho2);
 pf[left] = dirichlet(0.);
 p_new[left] = dirichlet(0.);
 u.n[left] = dirichlet(0.);
 
+u_l.n[top] = 0;
+u_l.n[bottom] = 0;
 u_l.n[left] = neumann(0.);
 /***********************************************************************************************/
 
@@ -103,14 +106,14 @@ int main() {
   size (L0); 
   init_grid(1<<level); 
   // fluid densities
-  rho1 = 958;
-  rho2 = 0.6;
+  rho1 = 2.5;
+  rho2 = 0.25;
   // fluid viscosity
-  mu1 = 2.82e-4;
-  mu2 = 1.23e-5;
+  mu1 = 0.098;
+  mu2 = 0.007;
   // fluid surface tension
   f.sigma = 0.059;
-  TOLERANCE = 1e-6; // scalar value residual tolerance, used in 'possion.h'
+  TOLERANCE = 1e-8; // scalar value residual tolerance, used in 'possion.h'
 
   #if REDUCED
     G.x = 0;
@@ -120,7 +123,7 @@ int main() {
 }
 
 /***************************************** Stefan problem geometry configuration ************************************/
-#define H0 3.225e-4 // initial vapor thickness
+#define H0 0.1 // initial vapor thickness
 #define stefan(x, y, H) (x-H0) // initial configuration
 event init (t = 0) {
 
@@ -131,7 +134,7 @@ event init (t = 0) {
 
 /**************** define initial temperature using volume weighted method *************************/
   foreach()
-    T[] = (1-f[])*(T_wall - T_sup/H0*x) + f[]*T_sat; // initial temperature
+    T[] = (1-f[])*T_sat + f[]*T_wall; // initial temperature
   boundary({T});
   }
 
@@ -142,16 +145,7 @@ event mass_flux(i++)
   T.tr_eq = T_sat; // define saturated temperature which assumes at interface
   delta_magnini(f,delta_s); // delta_s function calculation
 
-  //sun_model(T,f,div_pc,L_h);// directly obtain volumetric mass source term
-  sun_model_vapor(T,f,m_dot_v,L_h);
-  //sun_model_liquid(T,f,m_dot_l,L_h);
-
-  foreach()
-  {
-    m_dot[] = m_dot_v[];
-    div_pc[] = m_dot[]/Delta;
-  }
-  boundary({m_dot,div_pc});
+  sun_model(T,f,div_pc,L_h);// directly obtain volumetric mass source term
 
   scalar ff[];
   foreach()
@@ -169,7 +163,6 @@ event mass_flux(i++)
 }
 
 /********************************** vof advection with mass source **********************/
-
 event vof(i++)
 {
 /******************* step-1: construct entire divergence-free domain *******************/  
@@ -180,7 +173,7 @@ event vof(i++)
     divv[] /= dt;
   }
   
-  poisson (p_new, divv, alpha, tolerance = TOLERANCE/sq(dt), nrelax = mgp.nrelax);
+  poisson (p_new, divv, alpha, tolerance = TOLERANCE/sq(dt), nrelax = 4);
   
   // add phase change correction to u_l
   foreach_face()
@@ -217,7 +210,6 @@ event vof(i++)
   }
   boundary({f});
 }
-
 /******************************************** energy diffusion ********************************/
 event tracer_diffusion(i++)
 {
@@ -233,6 +225,7 @@ event tracer_diffusion(i++)
     T.D = D_v;
   }
 
+
   face vector diffusion_coef[];
   foreach_face()
     diffusion_coef.x[] = fm.x[]*T.D;
@@ -242,13 +235,8 @@ event tracer_diffusion(i++)
   foreach()
     heat_s[] = div_pc[]*L_h/T.rho_cp;
   boundary({heat_s});
-
-  foreach()
-    if(interfacial(point,f))
-      T[] = T_sat;
-  boundary({T});
-  heat_source (T, f, div_pc,L_h);// add heat source term in diffusion equation
-
+/*************************************************heat transfer models**********************************************************/
+  zhang_diffusion_liquid(T,f);
 /***********************************************************************************************************/
 }
 
@@ -279,7 +267,7 @@ event projection(i++){
 we add the volumetric mass source in poisson equation projection step after solving intermediate fluid velocity.
 This is for solving the fluid velocity and pressure with phase change.It is similar to the methodology without phase change.
 */
-  project_pc(uf,p,alpha,dt, mgp.nrelax,div_pc,rhoo); // projection step for entire domain
+  project_pc(uf,p,alpha,dt,4,div_pc,rhoo); // projection step for entire domain
   //project_liquid(uf,p,alpha,dt,4,div_pc); // for volumetric mass source
   centered_gradient (p, g);// calculate centered acceleration
   correction (dt); // correct face velocity on centered one
@@ -316,8 +304,10 @@ double coeff()
   do
   {
     x_old = x;
-    f = x*exp(sq(x))*erf(x) - cp_v*T_sup/(L_h*sqrt(pi)); 
-    df = 2*sq(x)*exp(sq(x))*erf(x) + exp(sq(x))*erf(x) + 2*x/sqrt(pi);
+    f = exp(sq(x))*erf(x)*(x - (T_wall - T_sat)*cp_v*lambda_l*sqrt(D_v)*exp(-sq(x)*(sq(rho2)*D_v)/(sq(rho1)*D_l))/
+    (L_h*lambda_v*(sqrt(pi*D_l))*erfc(x*(rho2*sqrt(D_v)/(rho1*sqrt(D_v)))))) - cp_v*(T_wall - T_sat)/(L_h*sqrt(pi)); 
+    df = (5497*x*exp(239*sq(x)/5000000)/(1026250000*erfc(0.007*x)) - 161*exp(-239*sq(x)/5000000)/(205250*sqrt(pi)*sq(erfc(0.007*x))) + 1)*exp(sq(x))*erf(x)
+    + 2*x*(x - 46*(exp(-239*sq(x)/5000000))/(821*erfc(0.007*x)))*exp(sq(x))*erf(x) + 2*(x -  46*(exp(-239*sq(x)/5000000))/(821*erfc(0.007*x)))/(sqrt(pi));
     x = x_old - f/df;
   }while (fabs(x - x_old) > TOLER);
   return x;
@@ -327,7 +317,7 @@ double coeff()
 double exact(double t)
 {
   double a = coeff();
-  double delta_x = 2*a*sqrt(D_v*t);
+  double delta_x = 2*a*sqrt(D_l*t);
   return delta_x;
 }
 
@@ -337,7 +327,7 @@ double temper(double t, double x)
 {
 
   double a = coeff();
-  double temp_x = T_wall + ((T_sat - T_wall))/erf(a)*erf(x/(2*sqrt(t*D_v)));
+  double temp_x = T_wall - ((T_sat - T_wall))/erf(a)*erf(x/(2*sqrt(t*D_v)));
 
   return temp_x;
 }
@@ -373,7 +363,7 @@ void mg_print (mgstats mg)
 	    mg.nrelax);
 }
 
-event logfile (t = 0; t <= 10; t += 0.01) { 
+event logfile (t = 0; t <= 100; t += 1) { 
   double delta_interface = exact(t);
   double delta_velocity = velo(t);
   double xb = 0., vx = 0.,vy = 0., sb = 0.,yb = 0., nu = 0., mass = 0, sbb = 0;
@@ -398,7 +388,7 @@ event logfile (t = 0; t <= 10; t += 0.01) {
 }
 
 
-event snap (t+=1)
+event snap (t+=10)
  {
    char name[80];
    sprintf (name, "snapshot-%g.gfs",t);
@@ -416,7 +406,7 @@ event interface_position (t += 0.01) {
   fflush (fp);
 }
 
-event temperature_value (t+=0.1){
+event temperature_value (t+=10){
   char *name = NULL;
   name = (char *) malloc(sizeof(char) * 256);
   sprintf (name, "temperature/temperature-%.1f",t);
@@ -428,7 +418,7 @@ event temperature_value (t+=0.1){
       fclose(fp1);
 }
 
-event velocity_magnitude (t+=0.1){
+event velocity_magnitude (t+=10){
 
   char *name = NULL;
   name = (char *) malloc(sizeof(char) * 256);
@@ -441,7 +431,7 @@ event velocity_magnitude (t+=0.1){
       fclose(fp1);
 }
 
-event movies (t = 0; t <= 10; t += 0.1) {
+event movies (t = 0; t <= 100; t += 1) {
   
   foreach()
     f[] = clamp(f[], 0., 1.);

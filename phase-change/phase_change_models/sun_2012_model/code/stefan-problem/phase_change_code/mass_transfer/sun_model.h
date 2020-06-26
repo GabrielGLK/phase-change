@@ -21,12 +21,14 @@ void sun_model_center (scalar tr, scalar f, scalar temp, double L_h)
       gd[] = 0;
       foreach_dimension()
         {
-          f_v[] += (dd[1] - dd[-1])/(2*Delta);
-          gd[] += (tr[1] - tr[-1])/(2*Delta);
+          f_v[] += sq((dd[1] - dd[-1])/(2*Delta));
+          gd[] += sq((tr[1] - tr[-1])/(2*Delta));
         }
+        f_v[] = sqrt(f_v[]);
+        gd[] = sqrt(gd[]);
     }
   boundary({f_v,gd});
-/* //the segregation method, to avoid interface smearing while declaring mass transfer
+/*
   foreach()
     {
       if(interfacial(point,f)&&f[-1] == 0)
@@ -47,16 +49,33 @@ void sun_model_simple (scalar tr, scalar f, scalar temp, double L_h)
   foreach()
     f[] = clamp(f[], 0., 1.);
   boundary ({f, tr});
-  
 
-  vector gtr[];
+  vector m[];
+  compute_normal(f,m);
+  scalar gtr[];
+  scalar tt[];
   foreach()
+  {
+    gtr[] = 0;
+    if(interfacial(point,f))
     {
-      gtr.x[] = 0;
+      coord n = interface_normal(point,f), p, q;
+      double alpha = plane_alpha (f[], n);
+      //double alpha_all = alpha + 0.5*(n.x + n.y);
+      line_length_center (n, alpha, &p); // interface fragment center coordinate
+
+      //q.x = p.x  + n.x;
+      //q.y = p.y + n.y;
+      tt[] = interpolate_2(point,tr,p);//using interpolation temperature in interfacial cell
+      //tt[-1] = interpolate_2(point,tr,q);
+
       foreach_dimension()
-        gtr.x[] += (face_value(tr,1) - face_value(tr,0))/Delta;//face_value(a,i) for calculate face value
+        gtr[] += sq((2*tr.tr_eq - tr[-1] - tt[])/(2*Delta)*(2/(1 + alpha + fabs(alpha))));// give a coefficient to make sure the temperature gradient consistent with physical problem, new here
+        //gtr.x[] += (tr.tr_eq - tt[-1])/(2*Delta);
+      gtr[] = sqrt(gtr[]);
     }
-  boundary((scalar*){gtr});
+  }
+  boundary({tt,gtr});
 
   scalar dd[];
   foreach()
@@ -68,17 +87,14 @@ void sun_model_simple (scalar tr, scalar f, scalar temp, double L_h)
     {
       f_v[] = 0;
       foreach_dimension()
-        f_v[] += (face_value(dd,1) - face_value(dd,0))/Delta;//((dd[1] - dd[])/Delta + (dd[] - dd[-1])/Delta)/2
+        f_v[] += sq((dd[1] - dd[-1])/(2*Delta));//((dd[1] - dd[])/Delta + (dd[] - dd[-1])/Delta)/2
+      f_v[] = sqrt(f_v[]);
     }
   boundary({f_v});
 
   // just simple use face temperature to get temperature gradient
   foreach()
-  {
-    temp[] = 0;
-    foreach_dimension()
-      temp[] += 2*0.025*(gtr.x[]+gtr.x[1])*f_v[]/L_h; // Eq.(20), 0.025 is the unsaturated thermo conductivity
-  }
+    temp[] = 2*0.025*gtr[]*f_v[]/L_h; // Eq.(20), 0.025 is the unsaturated thermo conductivity
   boundary({temp});
 }
 
@@ -102,7 +118,7 @@ void sun_model_face (scalar tr, scalar f, scalar temp, double L_h)
   foreach_face() {
     grad_t.x[] = 0.;
 
-    if (interfacial(point,f)||interfacial(neighborp(-1), f)) {
+    if (interfacial(point,f) || interfacial(neighborp(-1), f)) {
       coord nf;
       foreach_dimension()
         nf.x = 0.;
@@ -110,7 +126,6 @@ void sun_model_face (scalar tr, scalar f, scalar temp, double L_h)
         foreach_dimension()
           nf.x += n.x[];
       }
-
       if (interfacial(neighborp(-1), f)) {
         nf.x += n.x[-1];
         nf.y += n.y[-1];
@@ -122,8 +137,8 @@ void sun_model_face (scalar tr, scalar f, scalar temp, double L_h)
       foreach_dimension()
         nf.x /= norm;
       
-      if (nf.x > 0.) {
-        grad_t.x[] = (fabs(nf.x)*(gtr.x[1,0]) + fabs(nf.y)*(nf.y >= 0. ? gtr.x[1, 1] : gtr.x[1, -1]));
+      if (nf.x >= 0.) {
+        grad_t.x[] = (fabs(nf.x)*gtr.x[1,0] + fabs(nf.y)*(nf.y >= 0. ? gtr.x[1, 1] : gtr.x[1, -1]));
       }
       else if (nf.x < 0.) {
         grad_t.x[] = (fabs(nf.x)*gtr.x[-1,0]+ fabs(nf.y)*(nf.y >= 0. ? gtr.x[-1, 1] : gtr.x[-1, -1]));
@@ -131,24 +146,21 @@ void sun_model_face (scalar tr, scalar f, scalar temp, double L_h)
     }
   } 
   boundary((scalar *){grad_t});
-
   scalar dd[];
+  face vector f_v[];
   foreach()
     dd[] = 1 - f[];
   boundary({dd});
 
-  face vector f_v[];
-  foreach()
+  foreach_face()
     f_v.x[] = (dd[] - dd[-1])/Delta;
   boundary((scalar *){f_v});
 
-  double mm;
   foreach()
     {
-      mm = 0;
+      temp[] = 0;
       foreach_dimension()
-        mm += 0.025*grad_t.x[]*f_v.x[]/L_h;// the mass flux should be some value, we can put it in the cenered cell 
-      temp[] = mm;// transfer the neigboring cell tempearture gradient to interfacial cell center
+        temp[] += 0.025*grad_t.x[]*f_v.x[]/L_h; // unsaturated thermo-conductivity, film-boiling is 1
     }
   boundary({temp});
 }

@@ -29,7 +29,7 @@
 
 // grid level
 #define maxlevel 6
-#define level 6
+#define level 7
 #define minlevel 5
 
 /*************** physical properties ****************************/
@@ -145,8 +145,14 @@ event mass_flux(i++)
   T.tr_eq = T_sat; // define saturated temperature which assumes at interface
   delta_magnini(f,delta_s); // delta_s function calculation
 
-  sun_model(T,f,div_pc,L_h);// directly obtain volumetric mass source term
-
+  sun_model_simple(T,f,div_pc,L_h);
+  //sun_model_face(T,f,div_pc,L_h);
+  //sun_model_center(T,f,div_pc,L_h);// directly obtain volumetric mass source term
+/*
+   foreach()
+    div_pc[] = m_dot[]/Delta;
+  boundary({div_pc});
+*/
   scalar ff[];
   foreach()
     ff[] = clamp(ff[],0,1);
@@ -237,6 +243,13 @@ event tracer_diffusion(i++)
   boundary({heat_s});
 /*************************************************heat transfer models**********************************************************/
   zhang_diffusion_liquid(T,f);
+  /*
+  foreach()
+    if(interfacial(point,f))
+      T[] = T_sat;
+  boundary({T});
+  heat_source (T, f, div_pc, L_h);// add heat source term in diffusion equation
+  */
 /***********************************************************************************************************/
 }
 
@@ -289,7 +302,7 @@ This is for solving the fluid velocity and pressure with phase change.It is simi
 
 #if ADAPT
 event adapt (i++) {
-  adapt_wavelet ({f}, (double[]){1e-6}, maxlevel,minlevel);
+  adapt_wavelet ({T}, (double[]){1e-1}, maxlevel,minlevel);
 }
 #endif
 
@@ -386,7 +399,7 @@ event logfile (t = 0; t <= 10; t += 0.01) {
 }
 
 
-event snap (t+=1)
+event snap (t+=0.1)
  {
    char name[80];
    sprintf (name, "snapshot-%g.gfs",t);

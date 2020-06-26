@@ -33,8 +33,8 @@
 #define minlevel 5
 
 /*************** physical properties ****************************/
-#define T_sat 373.15// could not be zero, because in Lee model for denominator
-#define T_sup 12 // difference between wall and saturated temperatures
+#define T_sat 10// could not be zero, because in Lee model for denominator
+#define T_sup 2 // difference between wall and saturated temperatures
 #define T_wall (T_sat + T_sup)
 #define cp_l 10 // liquid heat capacity
 #define cp_v 10 
@@ -42,8 +42,8 @@
 #define lambda_l 0.0015 // liquid conductivity coefficient
 
 #define lambda_v 0.0035
-#define D_l lambda_l/(rho1*cp_l)//1.68e-7 // liquid diffusion coeffcient, used in 'diffusion.h'
-#define D_v lambda_v/(rho2*cp_v)//2.05e-5
+#define D_l lambda_l/(rho1*cp_l)//6e-5 // liquid diffusion coeffcient, used in 'diffusion.h'
+#define D_v lambda_v/(rho2*cp_v)//0.0014
 #define L_h 100 // latent heat 
 #define L0 1 // domain size
 #define rhoo (1/rho2 - 1/rho1) // used in mass source term 
@@ -76,12 +76,12 @@ scalar *tracers = {T}; // scalar tracers list
 /************************************ boundary conditions **************************************/
 // outflow boundary conditions on liquid side wall
 T[right] = dirichlet(T_wall);
-p[right] = dirichlet(0);
 pf[right] = dirichlet(0.);
 u.n[right] = neumann(0.);
+p[right] = dirichlet(0);
 
-T[left] = dirichlet(T_sat);
 //e[left] = dirichlet(T_wall*cp_v*rho2);
+T[left] = dirichlet(T_sat);
 pf[left] = dirichlet(0.);
 p_new[left] = dirichlet(0.);
 u.n[left] = dirichlet(0.);
@@ -112,7 +112,7 @@ int main() {
   mu1 = 0.098;
   mu2 = 0.007;
   // fluid surface tension
-  f.sigma = 0.059;
+  f.sigma = 0.001;
   TOLERANCE = 1e-8; // scalar value residual tolerance, used in 'possion.h'
 
   #if REDUCED
@@ -121,6 +121,65 @@ int main() {
   
   run();
 }
+
+/****************************************** analytical solution **********************************************/
+// Newton interpolation method
+#define TOLER 1e-10
+double coeff()
+{
+  double x = 0.1, x_old; // guess value
+  double f, df;
+  do
+  {
+    x_old = x;
+    /*
+    f = exp(sq(x))*erf(x)*(x - (T_wall - T_sat)*cp_v*lambda_l*sqrt(D_v)*exp(-sq(x)*(sq(rho2)*D_v)/(sq(rho1)*D_l))/
+    (L_h*lambda_v*(sqrt(pi*D_l))*erfc(x*(rho2*sqrt(D_v)/(rho1*sqrt(D_v)))))) - cp_v*(T_sat - T_sat)/(L_h*sqrt(pi)); 
+    */
+   f = x - 7*exp(-sq(x)*0.233)/(30*erfc(x*0.48)); 
+  /*
+    df = (1631*x*exp(-233*sq(x)/1000)/(15000*erfc(12*x/25)) - 28*exp(-2317*sq(x)/5000)/(125*sqrt(pi)*sq(erfc(12*x/25))) + 1)*exp(sq(x))*erf(x)
+    + 2*x*(x - (7*exp(-233*sq(x)/1000))/(30*erfc(12*x/25)))*exp(sq(x))*erf(x) +
+    2*(x - ((7*exp(-233*sq(x)/1000))/(30*erfc(12*x/25)))/sqrt(pi));
+    */
+  df = 1631*x*exp(-233*sq(x)/1000)/(15000*erfc(12*x/25)) - 1127*exp(-466289*sq(x)/1000000)/(5000*sqrt(pi)*sq(erfc(483*x/1000))) + 1;
+  x = x_old - f/df;
+  }while (fabs(x - x_old) > TOLER);
+  return x;
+}
+
+// interface position
+double exact(double t)
+{
+  double a = coeff();
+  double delta_x = 2*a*sqrt(D_v*t);
+  return delta_x;
+}
+
+// analytical temperature
+
+double temper(double t, double x)
+{
+
+  double a = coeff();
+  double temp_x = T_wall - ((T_wall - T_sat)/erfc(a*0.48))*erfc(x/(2*sqrt(t*D_l)) + a*(rho2 - rho1)/rho1*sqrt(D_v/D_l));
+
+  return temp_x;
+}
+event temperature_analy(t = 25; t += 10)
+{
+  
+  char *name = NULL;
+  name = (char *) malloc(sizeof(char) * 256);
+  sprintf (name, "temperature/temperature-analy-%.1f",t);
+  FILE*fp1 = fopen (name, "w");
+
+  double xx = exact(t);
+  for (double x = xx; x <= L0; x += 0.0001)
+      fprintf (fp1, " %g %g\n", x, temper(t,x)); 
+  fclose(fp1);
+}
+
 
 /***************************************** Stefan problem geometry configuration ************************************/
 #define H0 0.1 // initial vapor thickness
@@ -133,9 +192,15 @@ event init (t = 0) {
   fraction (f,  stefan(x,y,H0)); // interface reconstruction, vof method
 
 /**************** define initial temperature using volume weighted method *************************/
+scalar T_l[], T_v[];
   foreach()
-    T[] = (1-f[])*T_sat + f[]*T_wall; // initial temperature
-  boundary({T});
+  {
+    T_v[] = T_sat;
+    T_l[] = temper(25,x);
+    T[] = (1-f[])*T_v[] + f[]*T_l[];
+  }
+    //T[] = (1-f[])*T_sat + f[]*T_wall; // initial temperature
+  boundary({T_v,T_l,T});
   }
 
 
@@ -145,7 +210,7 @@ event mass_flux(i++)
   T.tr_eq = T_sat; // define saturated temperature which assumes at interface
   delta_magnini(f,delta_s); // delta_s function calculation
 
-  sun_model(T,f,div_pc,L_h);// directly obtain volumetric mass source term
+  sun_model_center(T,f,div_pc,L_h);// directly obtain volumetric mass source term
 
   scalar ff[];
   foreach()
@@ -202,10 +267,10 @@ event vof(i++)
       double alpha = plane_alpha(f[],n); // distance from original point to interface 
       //alpha -= m_dot[]*dt/(Delta*rho1)*sqrt(sq(n.x)+sq(n.y)); // phase-change shifting distance 
       alpha -= div_pc[]*dt/rho1*sqrt(sq(n.x)+sq(n.y)); // or use volumetric mass source in vof reconstruction directly
-      f[] = line_area(n.x,n.y,alpha); // cell volume fraction for n+1
+      //f[] = line_area(n.x,n.y,alpha); // cell volume fraction for n+1
 
 // second method: from interface advection
-    //f[] -= div_pc[]*dt/rho1;
+    f[] -= div_pc[]*dt/rho1;
     }
   }
   boundary({f});
@@ -221,10 +286,10 @@ event tracer_diffusion(i++)
     T.rho = rho1*f[]+rho2*(1-f[]);
     T.cp = cp_l*f[]+cp_v*(1-f[]);
     T.rho_cp = f[]*rho1*cp_l + (1-f[])*rho2*cp_v;
-    T.lambda = lambda_l*f[]+lambda_v*(1-f[]);
-    T.D = D_v;
+    T.lambda = lambda_l*f[]+lambda_v*(1-f[]); 
+    T.D = D_l;
   }
-
+  
 
   face vector diffusion_coef[];
   foreach_face()
@@ -237,6 +302,7 @@ event tracer_diffusion(i++)
   boundary({heat_s});
 /*************************************************heat transfer models**********************************************************/
   zhang_diffusion_liquid(T,f);
+  //heat_source (T, f, div_pc, L_h);// add heat source term in diffusion equation
 /***********************************************************************************************************/
 }
 
@@ -289,63 +355,9 @@ This is for solving the fluid velocity and pressure with phase change.It is simi
 
 #if ADAPT
 event adapt (i++) {
-  adapt_wavelet ({f}, (double[]){1e-6}, maxlevel,minlevel);
+  adapt_wavelet ({T}, (double[]){1e-3}, maxlevel,minlevel);
 }
 #endif
-
-
-/****************************************** analytical solution **********************************************/
-// Newton interpolation method
-#define TOLER 1e-6
-double coeff()
-{
-  double x = 1, x_old; // guess value
-  double f, df;
-  do
-  {
-    x_old = x;
-    f = exp(sq(x))*erf(x)*(x - (T_wall - T_sat)*cp_v*lambda_l*sqrt(D_v)*exp(-sq(x)*(sq(rho2)*D_v)/(sq(rho1)*D_l))/
-    (L_h*lambda_v*(sqrt(pi*D_l))*erfc(x*(rho2*sqrt(D_v)/(rho1*sqrt(D_v)))))) - cp_v*(T_wall - T_sat)/(L_h*sqrt(pi)); 
-    df = (5497*x*exp(239*sq(x)/5000000)/(1026250000*erfc(0.007*x)) - 161*exp(-239*sq(x)/5000000)/(205250*sqrt(pi)*sq(erfc(0.007*x))) + 1)*exp(sq(x))*erf(x)
-    + 2*x*(x - 46*(exp(-239*sq(x)/5000000))/(821*erfc(0.007*x)))*exp(sq(x))*erf(x) + 2*(x -  46*(exp(-239*sq(x)/5000000))/(821*erfc(0.007*x)))/(sqrt(pi));
-    x = x_old - f/df;
-  }while (fabs(x - x_old) > TOLER);
-  return x;
-}
-
-// interface position
-double exact(double t)
-{
-  double a = coeff();
-  double delta_x = 2*a*sqrt(D_l*t);
-  return delta_x;
-}
-
-// analytical temperature
-
-double temper(double t, double x)
-{
-
-  double a = coeff();
-  double temp_x = T_wall - ((T_sat - T_wall))/erf(a)*erf(x/(2*sqrt(t*D_v)));
-
-  return temp_x;
-}
-event temperature_analy(t = 0.29; t += 1)
-{
-  
-  char *name = NULL;
-  name = (char *) malloc(sizeof(char) * 256);
-  sprintf (name, "temperature/temperature-analy-%.1f",t);
-  FILE*fp1 = fopen (name, "w");
-
-  double xx = exact(t);
-  for (double x = 0; x <= xx; x += 0.00001)
-      fprintf (fp1, " %g %g\n", x, temper(t,x)); 
-  for (double x = xx; x <= L0; x += 0.001)
-      fprintf (fp1, " %g %g\n", x, 373.15); 
-  fclose(fp1);
-}
 
 // analytical velocity
 double velo(double t)

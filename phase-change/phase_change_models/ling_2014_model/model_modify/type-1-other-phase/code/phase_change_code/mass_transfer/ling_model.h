@@ -34,7 +34,7 @@ void ling_model (scalar tr, scalar f, scalar temp, double L_h)
       double alpha = plane_alpha(f[],nf); //interface distance to centered point in one cell
       double alpha_1 = plane_alpha(f[],nf) + 0.5*(nf.x + nf.y); 
       double delta_l = line_length_center (nf, alpha, &p)*Delta;
-      if (interfacial(point,f) || interfacial(neighborp(-1), f))
+      if (interfacial(point,f))
       { 
         if(alpha > 0)
           {
@@ -48,7 +48,7 @@ void ling_model (scalar tr, scalar f, scalar temp, double L_h)
           else
           {
             //a better accuracy
-              coord p = {-1,0}, q = {-1,1}, s = {0,1};// coordinates of cells around interface
+             /* coord p = {-1,0}, q = {-1,1}, s = {0,1};// coordinates of cells around interface
               double alpha_a = fabs(nf.y*s.y - alpha_1)/(sqrt(sq(nf.x) + sq(nf.y)));
               double alpha_b = fabs(nf.x*q.x + nf.y*q.y - alpha_1)/(sqrt(sq(nf.x) + sq(nf.y)));
               double alpha_c = fabs(nf.x*p.x - alpha_1)/(sqrt(sq(nf.x) + sq(nf.y)));
@@ -59,11 +59,11 @@ void ling_model (scalar tr, scalar f, scalar temp, double L_h)
                 - tr.tr_eq)/fabs(alpha_b*Delta);
               else if(fabs(nf.x) > sqrt(3)/2)
                 gtr_v[] = ((nf.x<0?tr[-1]:tr[1]) - tr.tr_eq)/fabs(alpha_c*Delta);// stefan problem using this term
-             /*
+             */ 
             A[] = fabs(alpha*Delta)*(fabs(nf.x)/Delta * (nf.x < 0?tr[-1]:tr[1]) + fabs(nf.y)/Delta * (nf.y >= 0? tr[0,1]:tr[0,-1])) + tr.tr_eq;
             B[] = fabs(alpha*Delta)*(fabs(nf.x)/Delta + fabs(nf.y)/Delta) + 1;
             t_inter_v[] = A[]/B[];
-            gtr_v[] = (t_inter_v[] - tr.tr_eq)/fabs(alpha*Delta);*/ 
+            gtr_v[] = (t_inter_v[] - tr.tr_eq)/fabs(alpha*Delta);
             //gtr_v[] = ((nf.x < 0?tr[-1]:tr[1]) - t_inter_l[])/Delta*fabs(nf.x) + ((nf.y > 0? tr[0,-1]:tr[0,1]) - t_inter_l[])/Delta*fabs(nf.y);
             temp[] = (0.025*gtr_v[])/L_h*delta_l/dv(); // vapor side
             }
@@ -110,14 +110,14 @@ void ling_model_modify (scalar tr, scalar f, scalar temp, double L_h)
       double alpha = plane_alpha(f[],nf); //interface distance to centered point in one cell
       double alpha_1 = plane_alpha(f[],nf) + 0.5*(nf.x + nf.y); 
       double delta_l = line_length_center (nf, alpha, &p)*Delta;
-      if (interfacial(point,f) || interfacial(neighborp(-1), f))
-      { /*
+      if (interfacial(point,f))
+      { 
         A[] = fabs(alpha*Delta)*(fabs(nf.x)/Delta * (nf.x < 0?tr[-1]:tr[1]) + fabs(nf.y)/Delta * (nf.y >= 0? tr[0,1]:tr[0,-1])) + tr.tr_eq;
         B[] = fabs(alpha*Delta)*(fabs(nf.x)/Delta + fabs(nf.y)/Delta) + 1;
         t_inter_v[] = A[]/B[];
-        gtr_v[] = (t_inter_v[] - tr.tr_eq)/fabs(alpha*Delta);*/
+        gtr_v[] = (t_inter_v[] - tr.tr_eq)/fabs(alpha*Delta);
         //gtr_v[] = ((nf.x < 0?tr[-1]:tr[1]) - t_inter_l[])/Delta*fabs(nf.x) + ((nf.y > 0? tr[0,-1]:tr[0,1]) - t_inter_l[])/Delta*fabs(nf.y);
-      
+      /*
       coord p = {-1,0}, q = {-1,1}, s = {0,1};// coordinates of cells around interface
       double alpha_a = fabs(nf.y*s.y - alpha_1)/(sqrt(sq(nf.x) + sq(nf.y)));
       double alpha_b = fabs(nf.x*q.x + nf.y*q.y - alpha_1)/(sqrt(sq(nf.x) + sq(nf.y)));
@@ -129,7 +129,7 @@ void ling_model_modify (scalar tr, scalar f, scalar temp, double L_h)
             - tr.tr_eq)/fabs(alpha_b*Delta);
       else if(fabs(nf.x) > sqrt(3)/2)
         gtr_v[] = ((nf.x<0?tr[-1]:tr[1]) - tr.tr_eq)/fabs(alpha_c*Delta);// stefan problem using this term      
-        
+        */
         temp[] = (0.025*gtr_v[])/L_h*delta_l/dv(); // vapor side
     }
 
